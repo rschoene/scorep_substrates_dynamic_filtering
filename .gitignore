@@ -1,0 +1,10 @@
+*.o
+*.obj
+*.a
+*.la
+*.lo
+*.so
+*.so.*
+
+# build directories
+build
