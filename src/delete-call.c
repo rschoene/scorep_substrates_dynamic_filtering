@@ -16,7 +16,7 @@
    @param ptr       Position to write the NOP.
  */
 static void
-write_nop( void* ptr )
+write_nop( char* ptr )
 {
     memset( ptr,     0x0f, 1 );
     memset( ptr + 1, 0x1f, 1 );
@@ -32,7 +32,7 @@ write_nop( void* ptr )
    @param writable  Whether or not to make the memory writeable (1) or not (0).
  */
 static void
-change_memory_access_rights( void* ptr, const int writeable )
+change_memory_access_rights( char* ptr, const int writeable )
 {
     int page_size = getpagesize( );
     void* first_ptr = ptr - ( (unsigned long) ptr % page_size );
@@ -63,7 +63,7 @@ change_memory_access_rights( void* ptr, const int writeable )
    @param ptr       Position of the callq to override.
  */
 static void
-override_callq( void* ptr )
+override_callq( char* ptr )
 {
     change_memory_access_rights( ptr, 1 );
     write_nop( ptr );
@@ -90,7 +90,7 @@ delete_call( const char* function_name )
             unw_step( &cursor );
             unw_get_reg( &cursor, UNW_REG_IP, &ip );
 
-            override_callq( (void*) ip - 5 );
+            override_callq( (char*) ip - 5 );
         }
     } while( unw_step( &cursor ) > 0 );
 }
