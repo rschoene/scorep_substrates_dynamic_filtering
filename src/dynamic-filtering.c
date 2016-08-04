@@ -171,6 +171,26 @@ static void register_thread( )
 }
 
 /**
+ * Get internal pointer to region info for given region handle.
+ *
+ * @param   region_handle                   The region to look up.
+ *
+ * @return                                  The corresponding region info.
+ */
+static inline region_info* get_region( uint64_t                         region_handle )
+{
+    region_info* current_region = regions;
+
+    // Select the correct region
+    while( current_region->region_handle != region_handle )
+    {
+        current_region = current_region->nxt;
+    }
+
+    return current_region;
+}
+
+/**
  * Get the thread local information for the given region.
  *
  * This is the correct way to access the thread local information for a region. This function checks
@@ -191,15 +211,7 @@ static per_thread_region_info* get_region_info( uint64_t                region_h
     }
 
     // Now we're sure, get the info
-    region_info* current_region = regions;
-
-    // Select the correct region
-    while( current_region->region_handle != region_handle )
-    {
-        current_region = current_region->nxt;
-    }
-
-    per_thread_region_info* current = current_region->local_info;
+    per_thread_region_info* current = get_region( region_handle )->local_info;
 
     // Select the correct thread local information
     while( current->thread_idx != thread_idx )
