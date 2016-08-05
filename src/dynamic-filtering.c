@@ -1,4 +1,5 @@
 #include <pthread.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -25,6 +26,8 @@ typedef struct per_thread_region_info
     uint64_t last_enter;
     /** Calculated region duration for this thread */
     uint64_t duration;
+    /** Marks whether the current thread is fine with deleting the call */
+    bool deletable;
     /** Linked list next pointer */
     struct per_thread_region_info* nxt;
 } per_thread_region_info;
@@ -61,12 +64,11 @@ static void add_local_infos( region_info*                               region_i
     int cntr = 0;
     per_thread_region_info* current = regions->local_info;
 
-    pthread_mutex_lock( &mtx );
-
     // Count the number of thread infos to build
     while( current != NULL )
     {
         cntr++;
+        printf( "Counter: %d, sizeof: %d, %d\n", cntr, sizeof( per_thread_region_info ), thread_idx );
         current = current->nxt;
     }
 
@@ -76,11 +78,8 @@ static void add_local_infos( region_info*                               region_i
     // Backwards building the thread local info list
     while( cntr > 0 )
     {
-        new = malloc( sizeof( per_thread_region_info ) );
+        new = calloc( 1, sizeof( per_thread_region_info ) );
         new->thread_idx = cntr;
-        new->call_cnt = 0;
-        new->last_enter = 0;
-        new->duration = 0;
         new->nxt = last;
 
         if( cntr == 1 )
@@ -94,8 +93,6 @@ static void add_local_infos( region_info*                               region_i
 
         cntr--;
     }
-
-    pthread_mutex_unlock( &mtx );
 }
 
 /**
@@ -126,11 +123,8 @@ static void register_thread( )
         // We register the first thread
         while( current_region != NULL )
         {
-            new = malloc( sizeof( per_thread_region_info ) );
+            new = calloc( 1, sizeof( per_thread_region_info ) );
             new->thread_idx = thread_idx;
-            new->call_cnt = 0;
-            new->last_enter = 0;
-            new->duration = 0;
 
             current_region->local_info = new;
             current_region = current_region->nxt;
@@ -153,12 +147,8 @@ static void register_thread( )
             }
 
             // Create a new element
-            new = malloc( sizeof( per_thread_region_info ) );
+            new = calloc( 1, sizeof( per_thread_region_info ) );
             new->thread_idx = thread_idx;
-            new->call_cnt = 0;
-            new->last_enter = 0;
-            new->duration = 0;
-            new->nxt = NULL;
 
             // Swap buffers
             current->nxt = new;
@@ -233,7 +223,6 @@ static void on_enter( struct SCOREP_Location*                           scorep_l
 {
     per_thread_region_info* info = get_region_info( region_handle );
     info->call_cnt++;
-    printf( "call_cnt (thread %d): %d\n", thread_idx, info->call_cnt );
 }
 
 static void on_exit( struct SCOREP_Location*                            scorep_location,
@@ -249,6 +238,8 @@ static void on_define_region( const char*                               region_n
                               SCOREP_RegionType                         region_type,
                               SCOREP_RegionHandle                       region_handle )
 {
+    pthread_mutex_lock( &mtx );
+
     region_info* last = NULL;
     region_info* current = regions;
 
@@ -260,21 +251,19 @@ static void on_define_region( const char*                               region_n
 
     if( last == NULL )
     {
-        regions = malloc( sizeof( region_info ) );
+        regions = calloc( 1, sizeof( region_info ) );
         regions->region_handle = region_handle;
-        regions->local_info = NULL;
-        regions->nxt = NULL;
         add_local_infos( regions );
     }
     else
     {
-        last->nxt = malloc( sizeof( region_info ) );
+        last->nxt = calloc( 1, sizeof( region_info ) );
         current = last->nxt;
         current->region_handle = region_handle;
-        current->local_info = NULL;
-        current->nxt = NULL;
         add_local_infos( current );
     }
+
+    pthread_mutex_unlock( &mtx );
 }
 
 static void on_init( )
