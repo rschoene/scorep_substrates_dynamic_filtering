@@ -62,16 +62,14 @@ change_memory_access_rights( char* ptr, const int writeable )
    Overrides a callq at the given position with a five byte NOP.
    @param ptr       Position of the callq to override.
  */
-static void
-override_callq( char* ptr )
+void override_callq( char* ptr )
 {
     change_memory_access_rights( ptr, 1 );
     write_nop( ptr );
     change_memory_access_rights( ptr, 0 );
 }
 
-void
-delete_call( const char* function_name )
+char* get_function_call_ip( const char* function_name )
 {
     printf( "In SCOREP_DeleteCall, name = %s\n", function_name );
     unw_cursor_t cursor;
@@ -90,7 +88,10 @@ delete_call( const char* function_name )
             unw_step( &cursor );
             unw_get_reg( &cursor, UNW_REG_IP, &ip );
 
-            override_callq( (char*) ip - 5 );
+            return (char*) ( ip - 5 );
         }
     } while( unw_step( &cursor ) > 0 );
+
+    // This shouldn't happen
+    return (char*) -1;
 }

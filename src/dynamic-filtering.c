@@ -38,6 +38,16 @@ typedef struct per_thread_region_info
 typedef struct region_info
 {
     uint64_t region_handle;
+    /** Number of threads currently between enter and exit for this region */
+    uint64_t active_threads;
+    /** Number of threads waiting for deletion */
+    uint64_t waiting_threads;
+    /** ID of the thread responsible for deleting the calls */
+    uint64_t deleter_id;
+    /** Conditional variable for deletion synchronization */
+    pthread_cond_t cond_var;
+    /** Pointer to the callq for the enter instrumentation function */
+    char* enter_func;
     per_thread_region_info* local_info;
     struct region_info* nxt;
 } region_info;
@@ -68,7 +78,6 @@ static void add_local_infos( region_info*                               region_i
     while( current != NULL )
     {
         cntr++;
-        printf( "Counter: %d, sizeof: %d, %d\n", cntr, sizeof( per_thread_region_info ), thread_idx );
         current = current->nxt;
     }
 
@@ -221,8 +230,22 @@ static void on_enter( struct SCOREP_Location*                           scorep_l
                       SCOREP_RegionHandle                               region_handle,
                       uint64_t*                                         metric_values )
 {
-    per_thread_region_info* info = get_region_info( region_handle );
-    info->call_cnt++;
+    region_info* region = get_region( region_handle );
+
+    pthread_mutex_lock( &mtx );
+    region->active_threads++;
+    pthread_mutex_unlock( &mtx );
+
+    // Testing stub
+    if( get_region_info( region_handle )->call_cnt++ >= 100
+     && region->deleter_id == 0 )
+    {
+        pthread_mutex_lock( &mtx );
+        region->deleter_id = thread_idx;
+        region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
+        pthread_cond_init( &( region->cond_var ), NULL );
+        pthread_mutex_unlock( &mtx );
+    }
 }
 
 static void on_exit( struct SCOREP_Location*                            scorep_location,
@@ -230,6 +253,33 @@ static void on_exit( struct SCOREP_Location*                            scorep_l
                      SCOREP_RegionHandle                                region_handle,
                      uint64_t*                                          metric_values )
 {
+    printf( "on_exit\n" );
+    region_info* region = get_region( region_handle );
+
+    if( region->deleter_id == 0 )
+    {
+        pthread_mutex_lock( &mtx );
+        region->active_threads--;
+        pthread_mutex_unlock( &mtx );
+    }
+    if( region->deleter_id == thread_idx )
+    {
+        pthread_mutex_lock( &mtx );
+        while( region->waiting_threads < region->active_threads )
+        {
+            pthread_cond_wait( &( region->cond_var ), &mtx );
+        }
+        override_callq( region->enter_func );
+        override_callq( get_function_call_ip( "__cyg_profile_func_exit" ) );
+        pthread_mutex_unlock( &mtx );
+    }
+    else
+    {
+        pthread_mutex_lock( &mtx );
+        region->waiting_threads++;
+        pthread_cond_signal( &( region->cond_var ) );
+        pthread_mutex_unlock( &mtx );
+    }
 }
 
 static void on_define_region( const char*                               region_name,
