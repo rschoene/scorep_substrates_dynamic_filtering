@@ -221,6 +221,18 @@ static per_thread_region_info* get_region_info( uint64_t                region_h
     return current;
 }
 
+
+static void on_team_begin( )
+{
+    printf( "On fork!" );
+    return;
+}
+
+static void on_team_end( )
+{
+
+}
+
 /**
  * Enter region.
  *
@@ -341,6 +353,10 @@ SCOREP_Substrates_Callback** SCOREP_SubstratePlugin_dynamic_filtering_plugin_get
                                                         (SCOREP_Substrates_Callback) on_enter;
     retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_EXIT_REGION] =
                                                         (SCOREP_Substrates_Callback) on_exit;
+    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_BEGIN] =
+                                                        (SCOREP_Substrates_Callback) on_team_begin;
+    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_END] =
+                                                        (SCOREP_Substrates_Callback) on_team_end;
     return retval;
 }
 

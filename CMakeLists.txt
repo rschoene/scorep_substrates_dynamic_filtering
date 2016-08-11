@@ -10,7 +10,7 @@ set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/common)
 
 file(GLOB_RECURSE PLUGIN_SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/*.c ${PROJECT_SOURCE_DIR}/src/*.h)
 
-add_definitions("-Wall -pedantic -std=c99")
+add_definitions("-Wall -pedantic -std=c99 -fopt-info-optall")
 
 if(BUILD_DEBUG)
     add_definitions("-ggdb")
