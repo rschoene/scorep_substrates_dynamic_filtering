@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 2.8)
 project(dynamic_filtering_plugin)
 
 option(BUILD_DEBUG "Include debugging symbols in library." OFF)
+option(RELATIVE "Use relative filtering." OFF)
+option(ABSOLUTE "Use absolute filtering." OFF)
 option(SCOREP_INCLUDE_DIRS "Path to Score-P sources." "")
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/common)
@@ -10,10 +12,18 @@ set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/common)
 
 file(GLOB_RECURSE PLUGIN_SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/*.c ${PROJECT_SOURCE_DIR}/src/*.h)
 
-add_definitions("-Wall -pedantic -std=c99 -fopt-info-optall")
+add_definitions("-Wall -pedantic -std=c11")
 
 if(BUILD_DEBUG)
     add_definitions("-ggdb")
+endif()
+
+if(RELATIVE)
+    add_definitions("-DFILTERING_RELATIVE")
+endif()
+
+if(ABSOLUTE)
+    add_definitions("-DFILTERING_ABSOLUTE")
 endif()
 
 include_directories(${SCOREP_INCLUDE_DIRS}/include ${SCOREP_INCLUDE_DIRS}/src/measurement/substrates/include ${SCOREP_INCLUDE_DIRS}/src/measurement/definitions/include ${SCOREP_INCLUDE_DIRS}/src/measurement/include ${SCOREP_INCLUDE_DIRS}/vendor/common/src/utils/include)
