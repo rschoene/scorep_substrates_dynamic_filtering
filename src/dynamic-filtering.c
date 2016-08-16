@@ -1,6 +1,14 @@
+#define UNW_LOCAL_ONLY
+#define _GNU_SOURCE /* <- needed for libunwind so stack_t is known */
+
+#include <stddef.h> /* <- needs to come before libunwind for size_t */
+#include <libunwind.h>
+#include <string.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #ifdef __STDC_NO_ATOMICS__
 #error "C11 conform compiler with atomics support needed.\n"
@@ -9,8 +17,6 @@
 #endif
 
 #include <scorep_substrates_definition.h>
-
-#include "delete-call.h"
 
 /**
  * I don't set a default because I'd like to have a non filtering version of this plugin. In case
@@ -108,6 +114,122 @@ static void update_mean_duration( )
     mean_duration = new_duration / ctr;
 }
 #endif /* FILTERING_RELATIVE */
+
+/**
+ * Helper function for override_callq.
+ *
+ * Writes a five byte NOP to the given position. Doesn't handle memory access permission handling
+ * itself, have a look at change_memory_access_rights for this.
+ *
+ * @param   ptr                             Position to write the NOP.
+ */
+static void write_nop( char*                                                        ptr )
+{
+    memset( ptr,     0x0f, 1 );
+    memset( ptr + 1, 0x1f, 1 );
+    memset( ptr + 2, 0x44, 1 );
+    memset( ptr + 3, 0x00, 1 );
+    memset( ptr + 4, 0x00, 1 );
+}
+
+/**
+ * Helper function for _override_callq.
+ *
+ * Changes the memory access permissions and adds or removes the write permission.
+ *
+ * @param   ptr                             Memory position to make (un-)writeable.
+ * @param   writable                        Whether or not to make the memory writeable (1) or
+ *                                          not (0).
+ */
+static void change_memory_access_rights( char*                                      ptr,
+                                         const int                                  writeable )
+{
+    // Get the page size of the system we're running on.
+    int page_size = sysconf( _SC_PAGE_SIZE );
+    // The callq may be splitted onto two different pages and mprotect changes access permissions
+    // on a per page basis, so we need to change the access permission on the pages where the first
+    // and the last byte of the callq reside.
+    void* first_ptr = ptr - ( (unsigned long) ptr % page_size );
+    void* second_ptr = ( ptr + 4 ) - ( (unsigned long) ( ptr + 4 ) % page_size );
+
+    if( writeable == 1 )
+    {
+        // Add the write permission.
+        if( mprotect( first_ptr, page_size, PROT_READ | PROT_WRITE | PROT_EXEC ) != 0
+         || mprotect( second_ptr, page_size, PROT_READ | PROT_WRITE | PROT_EXEC ) != 0 )
+        {
+            fprintf( stderr,  "Could not add write permission to memory access rights on position "
+                              "%p", ptr );
+        }
+    }
+    else
+    {
+        // Remove the write permission.
+        if( mprotect( first_ptr, page_size, PROT_READ | PROT_EXEC ) != 0
+         || mprotect( second_ptr, page_size, PROT_READ | PROT_EXEC ) != 0 )
+        {
+            fprintf( stderr,  "Could not remove write permission to memory access rights on position "
+                              "%p", ptr );
+        }
+    }
+}
+
+/**
+ * Overrides a callq at the given position with a five byte NOP.
+ *
+ * By calling change_memory_access_rights right before and after writing the NOP this function
+ * ensures that the correct part of the TXT segment is writable and it's only writable as long as
+ * needed.
+ *
+ * @param   ptr                             Position of the callq to override.
+ */
+static void override_callq( char*                                                   ptr )
+{
+    change_memory_access_rights( ptr, 1 );
+    write_nop( ptr );
+    change_memory_access_rights( ptr, 0 );
+}
+
+/**
+ * Returns the instruction pointer for the given function.
+ *
+ * This method walks down the call path and tries to find a function with the given name and
+ * returns a pointer for the first byte of the call to this function in the current call path.
+ * Note that only the first (beginning from the innermost function) occurrence of the function call
+ * will be handled.
+ *
+ * @param   function_name                   The function to look up.
+ *
+ * @return                                  Pointer to the first byte of the call to the given
+ *                                          function in the current call path.
+ */
+static char* get_function_call_ip( const char*                                      function_name )
+{
+    printf( "In SCOREP_DeleteCall, name = %s\n", function_name );
+    unw_cursor_t cursor;
+    unw_context_t uc;
+    unw_word_t ip, offset;
+    char sym[256];
+
+    unw_getcontext( &uc );
+    unw_init_local( &cursor, &uc );
+
+    do
+    {
+        if( unw_get_proc_name( &cursor, sym, sizeof( sym ), &offset ) == 0
+            && strcmp( sym, function_name ) == 0 )
+        {
+            unw_step( &cursor );
+            unw_get_reg( &cursor, UNW_REG_IP, &ip );
+
+            return (char*) ( ip - 5 );
+        }
+    } while( unw_step( &cursor ) > 0 );
+
+    // This shouldn't happen, if we're on this point, we tried to delete a function not present in
+    // the current call path.
+    return (char*) -1;
+}
 
 /**
  * Get internal pointer to region info for given region handle.
@@ -230,10 +352,10 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
  *  * singlethreaded: Mark the state as deletion ready and hold a mutex so that no new spawned
  *    thread can enter a possibly deleted region.
  */
-static void on_enter( __attribute__((unused)) struct SCOREP_Location*               scorep_location,
-                      uint64_t                                                      timestamp,
-                      SCOREP_RegionHandle                                           region_handle,
-                      __attribute__((unused)) uint64_t*                             metric_values )
+static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*        scorep_location,
+                             uint64_t                                               timestamp,
+                             SCOREP_RegionHandle                                    region_handle,
+                             __attribute__((unused)) uint64_t*                      metric_values )
 {
     region_info* region = get_region_info( region_handle );
 
@@ -278,10 +400,10 @@ static void on_enter( __attribute__((unused)) struct SCOREP_Location*           
  * This method contains the code for calculating metrics (see on_enter as well) and the actual
  * instrumentation override code.
  */
-static void on_exit( __attribute__((unused)) struct SCOREP_Location*                scorep_location,
-                     uint64_t                                                       timestamp,
-                     SCOREP_RegionHandle                                            region_handle,
-                     __attribute__((unused)) uint64_t*                              metric_values )
+static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*         scorep_location,
+                            uint64_t                                                timestamp,
+                            SCOREP_RegionHandle                                     region_handle,
+                            __attribute__((unused)) uint64_t*                       metric_values )
 {
     region_info* region = get_region_info( region_handle );
 
@@ -426,9 +548,9 @@ SCOREP_Substrates_Callback** SCOREP_SubstratePlugin_dynamic_filtering_plugin_get
     }
 
     retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_ENTER_REGION] =
-                                                        (SCOREP_Substrates_Callback) on_enter;
+                                                        (SCOREP_Substrates_Callback) on_enter_region;
     retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_EXIT_REGION] =
-                                                        (SCOREP_Substrates_Callback) on_exit;
+                                                        (SCOREP_Substrates_Callback) on_exit_region;
     retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_BEGIN] =
                                                         (SCOREP_Substrates_Callback) on_team_begin;
     retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_END] =

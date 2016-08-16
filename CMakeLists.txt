@@ -10,7 +10,7 @@ set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/common)
 
 #find_package(Scorep REQUIRED)
 
-file(GLOB_RECURSE PLUGIN_SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/*.c ${PROJECT_SOURCE_DIR}/src/*.h)
+set(PLUGIN_SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/dynamic-filtering.c)
 
 add_definitions("-Wall -Wextra -pedantic -std=c11")
 
