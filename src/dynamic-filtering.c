@@ -56,10 +56,6 @@ typedef struct region_info
 {
     /** Handle identifying the region */
     uint64_t region_handle;
-    /** Number of threads currently between enter and exit for this region */
-    uint64_t active_threads;
-    /** Number of threads waiting for deletion */
-    uint64_t waiting_threads;
 #ifdef FILTERING_RELATIVE
     /** Global counter for region entries */
     uint64_t call_cnt;
@@ -78,6 +74,8 @@ typedef struct region_info
     pthread_cond_t cond_var;
     /** Marks whether the region is deletable */
     bool deletable;
+    /** Marks whether the region has been deleted */
+    bool inactive;
 } region_info;
 
 /** Global list of defined regions */
@@ -105,6 +103,11 @@ __thread uint64_t thread_idx = 0;
 /** Mean duration across all regions */
 float mean_duration = 0;
 
+/**
+ * Update the mean duration of all regions.
+ *
+ * Only used if the plugin is compiled with FILTERING_RELATIVE.
+ */
 static void update_mean_duration( )
 {
     region_info* current = regions;
@@ -120,7 +123,7 @@ static void update_mean_duration( )
 
     mean_duration = new_duration / ctr;
 }
-#endif
+#endif /* FILTERING_RELATIVE */
 
 /**
  * Adds thread local information for a newly created region.
@@ -330,43 +333,45 @@ static void on_enter( struct SCOREP_Location*                           scorep_l
                       uint64_t*                                         metric_values )
 {
     region_info* region = get_region( region_handle );
-    per_thread_region_info* info = get_region_info( region_handle );
 
-    pthread_mutex_lock( &mtx );
+    if( !region->inactive )
+    {
+        per_thread_region_info* info = get_region_info( region_handle );
 
-#if defined( FILTERING_RELATIVE ) || defined( FILTERING_ABSOLUTE )
-    // Calculate some metrics.
-    printf( "on_enter\n" );
-    info->last_enter = timestamp;
+        pthread_mutex_lock( &mtx );
+
+        // Calculate some metrics.
+        printf( "on_enter\n" );
+        info->last_enter = timestamp;
 
 #ifdef FILTERING_RELATIVE
-    region->call_cnt++;
+        region->call_cnt++;
 #endif /* FILTERING_RELATIVE */
 
 #ifdef FILTERING_ABSOLUTE
-    info->call_cnt++;
+        info->call_cnt++;
 #endif /* FILTERING_ABSOLUTE */
-#endif /* FILTERING_RELATIVE || FILTERING_ABSOLUTE */
 
-    if( region->deletable )
-    {
-        pthread_mutex_lock( &deletion_barrier );
-        uint_fast64_t expection = 0;
-        if( atomic_compare_exchange_weak( &thread_ctr, &expection, 0 ) )
+        if( region->deletable )
         {
-            // We're the only thread, so keep the mutex and mark that we're deletion ready.
-            region->enter_func = get_function_call_ip( "__cyg_profile_enter_func" );
-            atomic_flag_test_and_set( &deletion_ready );
+            pthread_mutex_lock( &deletion_barrier );
+            uint_fast64_t expection = 0;
+            if( atomic_compare_exchange_weak( &thread_ctr, &expection, 0 ) )
+            {
+                // We're the only thread, so keep the mutex and mark that we're deletion ready.
+                region->enter_func = get_function_call_ip( "__cyg_profile_enter_func" );
+                atomic_flag_test_and_set( &deletion_ready );
+            }
+            else
+            {
+                // There are other threads around so deletion is impossible. Unlock the mutex and
+                // carry on.
+                pthread_mutex_unlock( &deletion_barrier );
+            }
         }
-        else
-        {
-            // There are other threads around so deletion is impossible. Unlock the mutex and carry
-            // on.
-            pthread_mutex_unlock( &deletion_barrier );
-        }
+
+        pthread_mutex_unlock( &mtx );
     }
-
-    pthread_mutex_unlock( &mtx );
 }
 
 /**
@@ -381,47 +386,51 @@ static void on_exit( struct SCOREP_Location*                            scorep_l
                      uint64_t*                                          metric_values )
 {
     region_info* region = get_region( region_handle );
-    per_thread_region_info* info = get_region_info( region_handle );
 
-    pthread_mutex_lock( &mtx );
-
-    printf( "on_exit\n" );
-
-    if( atomic_flag_test_and_set( &deletion_ready ) )
+    if( !region->inactive )
     {
-        // Reset mutex so normal program flow can be reached again.
-        pthread_mutex_unlock( &deletion_barrier );
-    }
-#if defined( FILTERING_RELATIVE ) || defined( FILTERING_ABSOLUTE )
-    else
-    {
-#ifdef FILTERING_RELATIVE
-        region->duration += ( timestamp - info->last_enter );
-        region->mean_duration = region->duration / region->call_cnt;
-        
-        update_mean_duration( );
+        per_thread_region_info* info = get_region_info( region_handle );
 
-        if( region->mean_duration < mean_duration - threshold )
+        pthread_mutex_lock( &mtx );
+
+        printf( "on_exit\n" );
+
+        if( atomic_flag_test_and_set( &deletion_ready ) )
         {
-            region->deletable = true;
+            // Set region to inactive so further processing of this region is skipped.
+            region->inactive = true;
+            // Reset mutex so normal program flow can be reached again.
+            pthread_mutex_unlock( &deletion_barrier );
         }
+        else
+        {
+#ifdef FILTERING_RELATIVE
+            region->duration += ( timestamp - info->last_enter );
+            region->mean_duration = region->duration / region->call_cnt;
+            
+            update_mean_duration( );
+
+            if( region->mean_duration < mean_duration - threshold )
+            {
+                region->deletable = true;
+            }
 #endif /* FILTERING_RELATIVE */
 #ifdef FILTERING_ABSOLUTE
-        info->duration += ( timestamp - info->last_enter );
+            info->duration += ( timestamp - info->last_enter );
 
-        if( info->duration / info->call_cnt > threshold )
-        {
-            info->deletable = true;
-        }
+            if( info->duration / info->call_cnt > threshold )
+            {
+                info->deletable = true;
+            }
 #endif /* FILTERING_ABSOLUTE */
+        }
+
+        // After atomic_flag_test_and_set deletion_ready is always true whether or not it was before.
+        // In neither case we want it to be true after on_exit
+        atomic_flag_clear( &deletion_ready );
+
+        pthread_mutex_unlock( &mtx );
     }
-#endif /* FILTERING_RELATIVE || FILTERING_ABSOLUTE */
-
-    // After atomic_flag_test_and_set deletion_ready is always true whether or not it was before.
-    // In neither case we want it to be true after on_exit
-    atomic_flag_clear( &deletion_ready );
-
-    pthread_mutex_unlock( &mtx );
 }
 
 static void on_define_region( const char*                               region_name,
