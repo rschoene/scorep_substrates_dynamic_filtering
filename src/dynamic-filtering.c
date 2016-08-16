@@ -8,8 +8,6 @@
 #include <stdatomic.h>
 #endif
 
-#include <SCOREP_Location.h>
-#include <SCOREP_Types.h>
 #include <scorep_substrates_definition.h>
 
 #include "delete-call.h"
@@ -24,48 +22,22 @@
 #endif
 
 /**
- * Stores calling information per thread.
- *
- * This is necessary as calculating the duration for one function call would be impossible otherwise
- * in a multithreaded environment.
- */
-typedef struct per_thread_region_info
-{
-    /** Thread id the information belong to */
-    uint64_t thread_idx;
-    /** Timestamp of last enter of the region in this thread */
-    uint64_t last_enter;
-#ifdef FILTERING_ABSOLUTE
-    /** Counter for region entries in this thread */
-    uint64_t call_cnt;
-    /** Calculated region duration for this thread */
-    uint64_t duration;
-#endif
-    /** Linked list next pointer */
-    struct per_thread_region_info* nxt;
-#ifdef FILTERING_ABSOLUTE
-    /** Marks whether the current thread is fine with deleting the call */
-    bool deletable;
-#endif
-} per_thread_region_info;
-
-/**
  * Stores region info.
  */
 typedef struct region_info
 {
     /** Handle identifying the region */
     uint64_t region_handle;
-#ifdef FILTERING_RELATIVE
     /** Global counter for region entries */
     uint64_t call_cnt;
     /** Global calculated region duration */
     uint64_t duration;
+#ifdef FILTERING_RELATIVE
     /** Mean region duration used for comparison */
     float mean_duration;
 #endif
     /** Pointer to the local information */
-    per_thread_region_info* local_info;
+    //per_thread_region_info* local_info;
     /** Linked list next pointer */
     struct region_info* nxt;
     /** Pointer to the callq for the enter instrumentation function */
@@ -78,8 +50,27 @@ typedef struct region_info
     bool inactive;
 } region_info;
 
+/**
+ * Stores calling information per thread.
+ *
+ * This is necessary as calculating the duration for one function call would be impossible otherwise
+ * in a multithreaded environment.
+ */
+typedef struct local_region_info
+{
+    /** Region id this info belongs to */
+    uint64_t region_handle;
+    /** Timestamp of last enter into this region */
+    uint64_t last_enter;
+    /** Linked list next pointer */
+    struct local_region_info* nxt;
+} local_region_info;
+
 /** Global list of defined regions */
 region_info* regions = NULL;
+
+/** Thread local region info */
+__thread local_region_info* local_info = NULL;
 
 /** General mutex used as a guard for writing region info */
 pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -95,9 +86,6 @@ atomic_flag deletion_ready = ATOMIC_FLAG_INIT;
 
 /** Threshold for filtering */
 unsigned long long threshold = 0;
-
-/** Thread local id */
-__thread uint64_t thread_idx = 0;
 
 #ifdef FILTERING_RELATIVE
 /** Mean duration across all regions */
@@ -126,120 +114,13 @@ static void update_mean_duration( )
 #endif /* FILTERING_RELATIVE */
 
 /**
- * Adds thread local information for a newly created region.
- *
- * Gets called whenever a new region is created.
- *
- * @param   region_info_ptr                 A pointer to the newly created region_info object.
- */
-static void add_local_infos( region_info*                               region_info_ptr )
-{
-    int cntr = 0;
-    per_thread_region_info* current = regions->local_info;
-
-    // Count the number of thread infos to build
-    while( current != NULL )
-    {
-        cntr++;
-        current = current->nxt;
-    }
-
-    per_thread_region_info* last = NULL;
-    per_thread_region_info* new;
-
-    // Backwards building the thread local info list
-    while( cntr > 0 )
-    {
-        new = calloc( 1, sizeof( per_thread_region_info ) );
-        new->thread_idx = cntr;
-        new->nxt = last;
-
-        if( cntr == 1 )
-        {
-            region_info_ptr->local_info = new;
-        }
-        else
-        {
-            last = new;
-        }
-
-        cntr--;
-    }
-}
-
-/**
- * Register a new thread.
- *
- * Gets called whenever a thread tries to access thread local information for the first time.
- */
-static void register_thread( )
-{
-    thread_idx++;
-    per_thread_region_info* last = NULL;
-    per_thread_region_info* current = regions->local_info;
-
-    pthread_mutex_lock( &mtx );
-
-    while( current != NULL )
-    {
-        thread_idx++;
-        last = current;
-        current = current->nxt;
-    }
-
-    per_thread_region_info* new;
-    region_info* current_region = regions;
-
-    if( last == NULL )
-    {
-        // We register the first thread
-        while( current_region != NULL )
-        {
-            new = calloc( 1, sizeof( per_thread_region_info ) );
-            new->thread_idx = thread_idx;
-
-            current_region->local_info = new;
-            current_region = current_region->nxt;
-        }
-    }
-    else
-    {
-        // We register another thread
-        int i;
-
-        while( current_region != NULL )
-        {
-            current = current_region->local_info;
-
-            // We're on the first element (thread_idx == 1) and want to go to the last existing
-            // (our thread_idx - 1)
-            for( i = 1; i < thread_idx - 1; ++i )
-            {
-                current = current->nxt;
-            }
-
-            // Create a new element
-            new = calloc( 1, sizeof( per_thread_region_info ) );
-            new->thread_idx = thread_idx;
-
-            // Swap buffers
-            current->nxt = new;
-            current_region = current_region->nxt;
-        }
-    }
-
-    // Unlock write mutex
-    pthread_mutex_unlock( &mtx );
-}
-
-/**
  * Get internal pointer to region info for given region handle.
  *
  * @param   region_handle                   The region to look up.
  *
  * @return                                  The corresponding region info.
  */
-static inline region_info* get_region( uint64_t                         region_handle )
+static inline region_info* get_region_info( uint64_t                    region_handle )
 {
     region_info* current_region = regions;
 
@@ -256,32 +137,60 @@ static inline region_info* get_region( uint64_t                         region_h
  * Get the thread local information for the given region.
  *
  * This is the correct way to access the thread local information for a region. This function checks
- * if the calling thread is already registered and registers it if necessary. Afterwards the correct
- * thread local information for the given region is returned.
+ * if the calling thread already has information about the region asked for and creates it if
+ * needed.
  *
  * @param   region_handle                   The region to access the thread local information for.
  *
  * @return                                  The thread local information for the given region and
  *                                          the calling thread.
  */
-static per_thread_region_info* get_region_info( uint64_t                region_handle )
+static local_region_info* get_local_info( uint64_t                      region_handle )
 {
-    // Is this thread already registered?
-    if( thread_idx == 0 )
+    local_region_info* current = local_info;
+
+    // Find the correct local region info
+    while( current != NULL )
     {
-        register_thread( );
+        if( current->region_handle == region_handle )
+        {
+            break;
+        }
+        else
+        {
+            current = current->nxt;
+        }
     }
 
-    // Now we're sure, get the info
-    per_thread_region_info* current = get_region( region_handle )->local_info;
-
-    // Select the correct thread local information
-    while( current->thread_idx != thread_idx )
+    if( current != NULL )
     {
-        current = current->nxt;
+        // We've found it? Return it!
+        return current;
     }
+    else
+    {
+        // We haven't found it? Create a new one and append it correctly to our thread local list.
+        if( local_info == NULL )
+        {
+            local_info = calloc( 1, sizeof( local_region_info ) );
+            local_info->region_handle = region_handle;
+            return local_info;
+        }
+        else
+        {
+            current = local_info;
+            local_region_info* tmp = calloc( 1, sizeof( local_region_info ) );
+            tmp->region_handle = region_handle;
 
-    return current;
+            while( current->nxt != NULL )
+            {
+                current = current->nxt;
+            }
+
+            current->nxt = tmp;
+            return tmp;
+        }
+    }
 }
 
 /**
@@ -317,44 +226,37 @@ static void on_team_end( struct SCOREP_Location*                        scorep_l
 /**
  * Enter region.
  *
- * This updates the region info (call counter and other relevant metrics) and decides whether or
- * not the region instrumentation should be overwritten. If so, it checks if we're in a multi-
- * threaded environment and acts accordingly:
+ * This updates the region info (call counter) and decides whether or not the region instrumentation
+ * should be overwritten. If so, it checks if we're in a multi threaded environment and acts
+ * accordingly:
  *
  *  * multithreaded: Skip deletion and wait untill all threads are joined.
  *  * singlethreaded: Mark the state as deletion ready and hold a mutex so that no new spawned
  *    thread can enter a possibly deleted region.
- *
- * For metric calculation at least two methods should be implemented, a relative and an absolute.
  */
 static void on_enter( struct SCOREP_Location*                           scorep_location,
                       uint64_t                                          timestamp,
                       SCOREP_RegionHandle                               region_handle,
                       uint64_t*                                         metric_values )
 {
-    region_info* region = get_region( region_handle );
+    region_info* region = get_region_info( region_handle );
 
+    // If the current region is already deleted, skip this whole thing.
     if( !region->inactive )
     {
-        per_thread_region_info* info = get_region_info( region_handle );
+        local_region_info* info = get_local_info( region_handle );
 
         pthread_mutex_lock( &mtx );
 
-        // Calculate some metrics.
-        printf( "on_enter\n" );
+        // Store the last (this) entry for the current thread.
         info->last_enter = timestamp;
 
-#ifdef FILTERING_RELATIVE
-        region->call_cnt++;
-#endif /* FILTERING_RELATIVE */
-
-#ifdef FILTERING_ABSOLUTE
-        info->call_cnt++;
-#endif /* FILTERING_ABSOLUTE */
-
+        // This region is marked for deletion but not already deleted.
         if( region->deletable )
         {
+            // Lock all new threads from entering any region.
             pthread_mutex_lock( &deletion_barrier );
+
             uint_fast64_t expection = 0;
             if( atomic_compare_exchange_weak( &thread_ctr, &expection, 0 ) )
             {
@@ -377,7 +279,7 @@ static void on_enter( struct SCOREP_Location*                           scorep_l
 /**
  * Exit region.
  *
- * This method contains further code for calculating metrics (see on_enter as well) and the actual
+ * This method contains the code for calculating metrics (see on_enter as well) and the actual
  * instrumentation override code.
  */
 static void on_exit( struct SCOREP_Location*                            scorep_location,
@@ -385,44 +287,44 @@ static void on_exit( struct SCOREP_Location*                            scorep_l
                      SCOREP_RegionHandle                                region_handle,
                      uint64_t*                                          metric_values )
 {
-    region_info* region = get_region( region_handle );
+    region_info* region = get_region_info( region_handle );
 
     if( !region->inactive )
     {
-        per_thread_region_info* info = get_region_info( region_handle );
+        local_region_info* info = get_local_info( region_handle );
 
         pthread_mutex_lock( &mtx );
 
-        printf( "on_exit\n" );
-
-        if( atomic_flag_test_and_set( &deletion_ready ) )
+        // Region is marked as deletable...
+        if( region->deletable )
         {
-            // Set region to inactive so further processing of this region is skipped.
-            region->inactive = true;
-            // Reset mutex so normal program flow can be reached again.
-            pthread_mutex_unlock( &deletion_barrier );
+            // ...and the current state is ready for deletion
+            if( atomic_flag_test_and_set( &deletion_ready ) )
+            {
+                // Set region to inactive so further processing of this region is skipped.
+                region->inactive = true;
+                // Reset mutex so normal program flow can be reached again.
+                pthread_mutex_unlock( &deletion_barrier );
+            }
         }
         else
         {
-#ifdef FILTERING_RELATIVE
+            region->call_cnt++;
             region->duration += ( timestamp - info->last_enter );
+
+#ifdef FILTERING_RELATIVE
             region->mean_duration = region->duration / region->call_cnt;
-            
+
             update_mean_duration( );
 
             if( region->mean_duration < mean_duration - threshold )
+#endif /* FILTERING_RELATIVE */
+#ifdef FILTERING_ABSOLUTE
+            if( region->duration / region->call_cnt < threshold )
+#endif /* FILTERING_ABSOLUTE */
             {
                 region->deletable = true;
             }
-#endif /* FILTERING_RELATIVE */
-#ifdef FILTERING_ABSOLUTE
-            info->duration += ( timestamp - info->last_enter );
-
-            if( info->duration / info->call_cnt > threshold )
-            {
-                info->deletable = true;
-            }
-#endif /* FILTERING_ABSOLUTE */
         }
 
         // After atomic_flag_test_and_set deletion_ready is always true whether or not it was before.
@@ -433,6 +335,11 @@ static void on_exit( struct SCOREP_Location*                            scorep_l
     }
 }
 
+/**
+ * Call on Score-P's region definition event.
+ *
+ * Creates a new region_info struct in the globel regions list for the newly defined region.
+ */
 static void on_define_region( const char*                               region_name,
                               const char*                               region_canonical_name,
                               SCOREP_ParadigmType                       paradigm_type,
@@ -454,19 +361,22 @@ static void on_define_region( const char*                               region_n
     {
         regions = calloc( 1, sizeof( region_info ) );
         regions->region_handle = region_handle;
-        add_local_infos( regions );
     }
     else
     {
         last->nxt = calloc( 1, sizeof( region_info ) );
         current = last->nxt;
         current->region_handle = region_handle;
-        add_local_infos( current );
     }
 
     pthread_mutex_unlock( &mtx );
 }
 
+/**
+ * The plugin's initialization method.
+ *
+ * Just sets some default values and reads some environment variables.
+ */
 static void on_init( )
 {
     // Set deletion ready to the default false state.
@@ -475,17 +385,37 @@ static void on_init( )
     char* env_str = getenv( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD" );
     if( env_str == NULL )
     {
-        // TODO report error
+        fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD.\n" );
+        exit( EXIT_FAILURE );
     }
     else
     {
         threshold = strtoull( env_str, NULL, 10 );
-        perror( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD" );
+        if( threshold == 0 )
+        {
+            fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD or set "
+                             "to 0.\n" );
+            exit( EXIT_FAILURE );
+        }
     }
 }
 
+/**
+ * Finalizing method.
+ *
+ * Mainly used for cleanup.
+ */
 static void on_finalize( )
 {
+    region_info* current = regions;
+    region_info* tmp;
+
+    while( current != NULL )
+    {
+        tmp = current;
+        current = current->nxt;
+        free( tmp );
+    }
 }
 
 SCOREP_Substrates_Callback** SCOREP_SubstratePlugin_dynamic_filtering_plugin_get_event_callbacks( )
