@@ -36,14 +36,10 @@ typedef struct region_info
     /** Mean region duration used for comparison */
     float mean_duration;
 #endif
-    /** Pointer to the local information */
-    //per_thread_region_info* local_info;
     /** Linked list next pointer */
     struct region_info* nxt;
     /** Pointer to the callq for the enter instrumentation function */
     char* enter_func;
-    /** Conditional variable for deletion synchronization */
-    pthread_cond_t cond_var;
     /** Marks whether the region is deletable */
     bool deletable;
     /** Marks whether the region has been deleted */
@@ -120,7 +116,7 @@ static void update_mean_duration( )
  *
  * @return                                  The corresponding region info.
  */
-static inline region_info* get_region_info( uint64_t                    region_handle )
+static inline region_info* get_region_info( uint64_t                                region_handle )
 {
     region_info* current_region = regions;
 
@@ -145,7 +141,7 @@ static inline region_info* get_region_info( uint64_t                    region_h
  * @return                                  The thread local information for the given region and
  *                                          the calling thread.
  */
-static local_region_info* get_local_info( uint64_t                      region_handle )
+static local_region_info* get_local_info( uint64_t                                  region_handle )
 {
     local_region_info* current = local_info;
 
@@ -198,10 +194,10 @@ static local_region_info* get_local_info( uint64_t                      region_h
  * TXT segment. So we have to notice the creation of threads and wait untill all of them have
  * joined.
  */
-static void on_team_begin( struct SCOREP_Location*                      scorep_location,
-                           uint64_t                                     timestamp,
-                           SCOREP_ParadigmType                          scorep_paradigm,
-                           SCOREP_InterimCommunicatorHandle             scorep_thread_team )
+static void on_team_begin( __attribute__((unused)) struct SCOREP_Location*          scorep_location,
+                           __attribute__((unused)) uint64_t                         timestamp,
+                           __attribute__((unused)) SCOREP_ParadigmType              scorep_paradigm,
+                           __attribute__((unused)) SCOREP_InterimCommunicatorHandle scorep_thread_team )
 {
     // Thread initialization is protected by a mutex because otherwise threads could start to run
     // while we want to delete something.
@@ -213,10 +209,10 @@ static void on_team_begin( struct SCOREP_Location*                      scorep_l
 /**
  * See above.
  */
-static void on_team_end( struct SCOREP_Location*                        scorep_location,
-                         uint64_t                                       timestamp,
-                         SCOREP_ParadigmType                            scorep_paradigm,
-                         SCOREP_InterimCommunicatorHandle               scorep_thread_team )
+static void on_team_end( __attribute__((unused)) struct SCOREP_Location*            scorep_location,
+                         __attribute__((unused)) uint64_t                           timestamp,
+                         __attribute__((unused)) SCOREP_ParadigmType                scorep_paradigm,
+                         __attribute__((unused)) SCOREP_InterimCommunicatorHandle   scorep_thread_team )
 {
     // Thread joining doesn't have to be protected, because if there are threads to join, we'll
     // never get into deletion.
@@ -234,10 +230,10 @@ static void on_team_end( struct SCOREP_Location*                        scorep_l
  *  * singlethreaded: Mark the state as deletion ready and hold a mutex so that no new spawned
  *    thread can enter a possibly deleted region.
  */
-static void on_enter( struct SCOREP_Location*                           scorep_location,
-                      uint64_t                                          timestamp,
-                      SCOREP_RegionHandle                               region_handle,
-                      uint64_t*                                         metric_values )
+static void on_enter( __attribute__((unused)) struct SCOREP_Location*               scorep_location,
+                      uint64_t                                                      timestamp,
+                      SCOREP_RegionHandle                                           region_handle,
+                      __attribute__((unused)) uint64_t*                             metric_values )
 {
     region_info* region = get_region_info( region_handle );
 
@@ -282,10 +278,10 @@ static void on_enter( struct SCOREP_Location*                           scorep_l
  * This method contains the code for calculating metrics (see on_enter as well) and the actual
  * instrumentation override code.
  */
-static void on_exit( struct SCOREP_Location*                            scorep_location,
-                     uint64_t                                           timestamp,
-                     SCOREP_RegionHandle                                region_handle,
-                     uint64_t*                                          metric_values )
+static void on_exit( __attribute__((unused)) struct SCOREP_Location*                scorep_location,
+                     uint64_t                                                       timestamp,
+                     SCOREP_RegionHandle                                            region_handle,
+                     __attribute__((unused)) uint64_t*                              metric_values )
 {
     region_info* region = get_region_info( region_handle );
 
@@ -340,11 +336,11 @@ static void on_exit( struct SCOREP_Location*                            scorep_l
  *
  * Creates a new region_info struct in the globel regions list for the newly defined region.
  */
-static void on_define_region( const char*                               region_name,
-                              const char*                               region_canonical_name,
-                              SCOREP_ParadigmType                       paradigm_type,
-                              SCOREP_RegionType                         region_type,
-                              SCOREP_RegionHandle                       region_handle )
+static void on_define_region( __attribute__((unused)) const char*                   region_name,
+                              __attribute__((unused)) const char*                   region_canonical_name,
+                              __attribute__((unused)) SCOREP_ParadigmType           paradigm_type,
+                              __attribute__((unused)) SCOREP_RegionType             region_type,
+                              SCOREP_RegionHandle                                   region_handle )
 {
     pthread_mutex_lock( &mtx );
 
