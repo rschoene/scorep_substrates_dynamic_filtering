@@ -12,7 +12,7 @@ set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/common)
 
 file(GLOB_RECURSE PLUGIN_SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/*.c ${PROJECT_SOURCE_DIR}/src/*.h)
 
-add_definitions("-Wall -pedantic -std=c11")
+add_definitions("-Wall -Wextra -pedantic -std=c11")
 
 if(BUILD_DEBUG)
     add_definitions("-ggdb")
