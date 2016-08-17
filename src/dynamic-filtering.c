@@ -10,12 +10,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#ifdef __STDC_NO_ATOMICS__
-#error "C11 conform compiler with atomics support needed.\n"
-#else
-#include <stdatomic.h>
-#endif
-
 #include <scorep_substrates_definition.h>
 
 /**
@@ -42,16 +36,16 @@ typedef struct region_info
     uint64_t call_cnt;
     /** Global calculated region duration */
     uint64_t duration;
-#ifdef FILTERING_RELATIVE
-    /** Mean region duration used for comparison */
-    float mean_duration;
-#endif
     /** Linked list next pointer */
     struct region_info* nxt;
     /** Pointer to the callq for the enter instrumentation function */
     char* enter_func;
+    /** Pointer to the callq for the exit instrumentation function */
+    char* exit_func;
     /** Handle identifying the region */
     uint32_t region_handle;
+    /** Mean region duration used for comparison */
+    float mean_duration;
     /** Marks whether the region is deletable */
     bool deletable;
     /** Marks whether the region has been deleted */
@@ -86,11 +80,11 @@ pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 /** Special mutex used for stopping new threads entering regions while deleting calls */
 pthread_mutex_t deletion_barrier = PTHREAD_MUTEX_INITIALIZER;
 
-/** Atomic thread counter */
-atomic_uint_fast64_t thread_ctr = ATOMIC_VAR_INIT( 0 );
+/** Thread counter */
+uint64_t thread_ctr = 0;
 
-/** Atomic flag indicating we're deletion ready */
-atomic_flag deletion_ready = ATOMIC_FLAG_INIT;
+/** Flag indicating we're deletion ready */
+bool deletion_ready = false;
 
 /** Threshold for filtering */
 unsigned long long threshold = 0;
@@ -201,6 +195,7 @@ static char* get_function_call_ip( const char*                                  
 
     // This shouldn't happen, if we're on this point, we tried to delete a function not present in
     // the current call path.
+    fprintf( stderr, "Function name not found in call path. This shouldn't happen.\n" );
     return (char*) -1;
 }
 
@@ -294,10 +289,8 @@ static void on_team_begin( __attribute__((unused)) struct SCOREP_Location*      
                            __attribute__((unused)) SCOREP_ParadigmType              scorep_paradigm,
                            __attribute__((unused)) SCOREP_InterimCommunicatorHandle scorep_thread_team )
 {
-    // Thread initialization is protected by a mutex because otherwise threads could start to run
-    // while we want to delete something.
     pthread_mutex_lock( &deletion_barrier );
-    atomic_fetch_add( &thread_ctr, 1 );
+    thread_ctr++;
     pthread_mutex_unlock( &deletion_barrier );
 }
 
@@ -309,9 +302,9 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
                          __attribute__((unused)) SCOREP_ParadigmType                scorep_paradigm,
                          __attribute__((unused)) SCOREP_InterimCommunicatorHandle   scorep_thread_team )
 {
-    // Thread joining doesn't have to be protected, because if there are threads to join, we'll
-    // never get into deletion.
-    atomic_fetch_sub( &thread_ctr, 1 );
+    pthread_mutex_lock( &deletion_barrier );
+    thread_ctr--;
+    pthread_mutex_unlock( &deletion_barrier );
 }
 
 /**
@@ -345,15 +338,15 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         // This region is marked for deletion but not already deleted.
         if( region->deletable )
         {
+            region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
+
             // Lock all new threads from entering any region.
             pthread_mutex_lock( &deletion_barrier );
 
-            uint_fast64_t expection = 0;
-            if( atomic_compare_exchange_weak( &thread_ctr, &expection, 0 ) )
+            if( thread_ctr == 0 )
             {
                 // We're the only thread, so keep the mutex and mark that we're deletion ready.
-                region->enter_func = get_function_call_ip( "__cyg_profile_enter_func" );
-                atomic_flag_test_and_set( &deletion_ready );
+                deletion_ready = true;
             }
             else
             {
@@ -390,10 +383,12 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
         if( region->deletable )
         {
             // ...and the current state is ready for deletion
-            if( atomic_flag_test_and_set( &deletion_ready ) )
+            if( deletion_ready == true )
             {
                 // Set region to inactive so further processing of this region is skipped.
                 region->inactive = true;
+                // Reset the deletion ready flag
+                deletion_ready = false;
                 // Reset mutex so normal program flow can be reached again.
                 pthread_mutex_unlock( &deletion_barrier );
             }
@@ -414,13 +409,10 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
             if( region->duration / region->call_cnt < threshold )
 #endif /* FILTERING_ABSOLUTE */
             {
+                region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
                 region->deletable = true;
             }
         }
-
-        // After atomic_flag_test_and_set deletion_ready is always true whether or not it was before.
-        // In neither case we want it to be true after on_exit
-        atomic_flag_clear( &deletion_ready );
 
         pthread_mutex_unlock( &mtx );
     }
@@ -470,8 +462,6 @@ static void on_define_region( __attribute__((unused)) const char*               
  */
 static void on_init( )
 {
-    // Set deletion ready to the default false state.
-    atomic_flag_clear( &deletion_ready );
     // Get the threshold for filtering
     char* env_str = getenv( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD" );
     if( env_str == NULL )
