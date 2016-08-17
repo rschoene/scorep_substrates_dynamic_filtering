@@ -19,6 +19,12 @@
 #include <scorep_substrates_definition.h>
 
 /**
+ * TODO switch from define based compilation to runtime evaluation with environment variables
+ * TODO put write_nop and change_memory_access_rights into override_callq
+ * TODO cleanup
+ */
+
+/**
  * I don't set a default because I'd like to have a non filtering version of this plugin. In case
  * of a later production use it could be clever to set a default measurement method and remove
  * the "define || define" checks in the code for better maintainability.
@@ -32,8 +38,6 @@
  */
 typedef struct region_info
 {
-    /** Handle identifying the region */
-    uint64_t region_handle;
     /** Global counter for region entries */
     uint64_t call_cnt;
     /** Global calculated region duration */
@@ -46,6 +50,8 @@ typedef struct region_info
     struct region_info* nxt;
     /** Pointer to the callq for the enter instrumentation function */
     char* enter_func;
+    /** Handle identifying the region */
+    uint32_t region_handle;
     /** Marks whether the region is deletable */
     bool deletable;
     /** Marks whether the region has been deleted */
@@ -60,12 +66,12 @@ typedef struct region_info
  */
 typedef struct local_region_info
 {
-    /** Region id this info belongs to */
-    uint64_t region_handle;
     /** Timestamp of last enter into this region */
     uint64_t last_enter;
     /** Linked list next pointer */
     struct local_region_info* nxt;
+    /** Region id this info belongs to */
+    uint32_t region_handle;
 } local_region_info;
 
 /** Global list of defined regions */
@@ -116,33 +122,14 @@ static void update_mean_duration( )
 #endif /* FILTERING_RELATIVE */
 
 /**
- * Helper function for override_callq.
+ * Overrides a callq at the given position with a five byte NOP.
  *
- * Writes a five byte NOP to the given position. Doesn't handle memory access permission handling
- * itself, have a look at change_memory_access_rights for this.
+ * By calling mprotect right before and after writing the NOP this function ensures that the correct
+ * part of the TXT segment is writable and it's only writable as long as needed.
  *
- * @param   ptr                             Position to write the NOP.
+ * @param   ptr                             Position of the callq to override.
  */
-static void write_nop( char*                                                        ptr )
-{
-    memset( ptr,     0x0f, 1 );
-    memset( ptr + 1, 0x1f, 1 );
-    memset( ptr + 2, 0x44, 1 );
-    memset( ptr + 3, 0x00, 1 );
-    memset( ptr + 4, 0x00, 1 );
-}
-
-/**
- * Helper function for _override_callq.
- *
- * Changes the memory access permissions and adds or removes the write permission.
- *
- * @param   ptr                             Memory position to make (un-)writeable.
- * @param   writable                        Whether or not to make the memory writeable (1) or
- *                                          not (0).
- */
-static void change_memory_access_rights( char*                                      ptr,
-                                         const int                                  writeable )
+static void override_callq( char*                                                   ptr )
 {
     // Get the page size of the system we're running on.
     int page_size = sysconf( _SC_PAGE_SIZE );
@@ -152,42 +139,28 @@ static void change_memory_access_rights( char*                                  
     void* first_ptr = ptr - ( (unsigned long) ptr % page_size );
     void* second_ptr = ( ptr + 4 ) - ( (unsigned long) ( ptr + 4 ) % page_size );
 
-    if( writeable == 1 )
+    // Add the write permission.
+    if( mprotect( first_ptr, page_size, PROT_READ | PROT_WRITE | PROT_EXEC ) != 0
+     || mprotect( second_ptr, page_size, PROT_READ | PROT_WRITE | PROT_EXEC ) != 0 )
     {
-        // Add the write permission.
-        if( mprotect( first_ptr, page_size, PROT_READ | PROT_WRITE | PROT_EXEC ) != 0
-         || mprotect( second_ptr, page_size, PROT_READ | PROT_WRITE | PROT_EXEC ) != 0 )
-        {
-            fprintf( stderr,  "Could not add write permission to memory access rights on position "
-                              "%p", ptr );
-        }
+        fprintf( stderr,  "Could not add write permission to memory access rights on position "
+                          "%p", ptr );
     }
-    else
-    {
-        // Remove the write permission.
-        if( mprotect( first_ptr, page_size, PROT_READ | PROT_EXEC ) != 0
-         || mprotect( second_ptr, page_size, PROT_READ | PROT_EXEC ) != 0 )
-        {
-            fprintf( stderr,  "Could not remove write permission to memory access rights on position "
-                              "%p", ptr );
-        }
-    }
-}
+    
+    // Finally write that NOP.
+    memset( ptr,     0x0f, 1 );
+    memset( ptr + 1, 0x1f, 1 );
+    memset( ptr + 2, 0x44, 1 );
+    memset( ptr + 3, 0x00, 1 );
+    memset( ptr + 4, 0x00, 1 );
 
-/**
- * Overrides a callq at the given position with a five byte NOP.
- *
- * By calling change_memory_access_rights right before and after writing the NOP this function
- * ensures that the correct part of the TXT segment is writable and it's only writable as long as
- * needed.
- *
- * @param   ptr                             Position of the callq to override.
- */
-static void override_callq( char*                                                   ptr )
-{
-    change_memory_access_rights( ptr, 1 );
-    write_nop( ptr );
-    change_memory_access_rights( ptr, 0 );
+    // Remove the write permission.
+    if( mprotect( first_ptr, page_size, PROT_READ | PROT_EXEC ) != 0
+     || mprotect( second_ptr, page_size, PROT_READ | PROT_EXEC ) != 0 )
+    {
+        fprintf( stderr,  "Could not remove write permission to memory access rights on position "
+                          "%p", ptr );
+    }
 }
 
 /**
@@ -238,7 +211,7 @@ static char* get_function_call_ip( const char*                                  
  *
  * @return                                  The corresponding region info.
  */
-static inline region_info* get_region_info( uint64_t                                region_handle )
+static inline region_info* get_region_info( uint32_t                                region_handle )
 {
     region_info* current_region = regions;
 
@@ -263,7 +236,7 @@ static inline region_info* get_region_info( uint64_t                            
  * @return                                  The thread local information for the given region and
  *                                          the calling thread.
  */
-static local_region_info* get_local_info( uint64_t                                  region_handle )
+static local_region_info* get_local_info( uint32_t                                  region_handle )
 {
     local_region_info* current = local_info;
 
