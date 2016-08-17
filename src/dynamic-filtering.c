@@ -13,19 +13,8 @@
 #include <scorep_substrates_definition.h>
 
 /**
- * TODO switch from define based compilation to runtime evaluation with environment variables
- * TODO put write_nop and change_memory_access_rights into override_callq
  * TODO cleanup
  */
-
-/**
- * I don't set a default because I'd like to have a non filtering version of this plugin. In case
- * of a later production use it could be clever to set a default measurement method and remove
- * the "define || define" checks in the code for better maintainability.
- */
-#if defined( FILTERING_RELATIVE ) && defined( FILTERING_ABSOLUTE )
-#error "Can't compile a relative and an absolute filtering plugin at the same time.\n"
-#endif
 
 /**
  * Stores region info.
@@ -86,10 +75,12 @@ uint64_t thread_ctr = 0;
 /** Flag indicating we're deletion ready */
 bool deletion_ready = false;
 
+/** Flag indicating the filtering method to be used (true = absolute, false = relative) */
+bool filtering_absolute;
+
 /** Threshold for filtering */
 unsigned long long threshold = 0;
 
-#ifdef FILTERING_RELATIVE
 /** Mean duration across all regions */
 float mean_duration = 0;
 
@@ -113,7 +104,6 @@ static void update_mean_duration( )
 
     mean_duration = new_duration / ctr;
 }
-#endif /* FILTERING_RELATIVE */
 
 /**
  * Overrides a callq at the given position with a five byte NOP.
@@ -140,7 +130,7 @@ static void override_callq( char*                                               
         fprintf( stderr,  "Could not add write permission to memory access rights on position "
                           "%p", ptr );
     }
-    
+
     // Finally write that NOP.
     memset( ptr,     0x0f, 1 );
     memset( ptr + 1, 0x1f, 1 );
@@ -258,12 +248,14 @@ static local_region_info* get_local_info( uint32_t                              
         // We haven't found it? Create a new one and append it correctly to our thread local list.
         if( local_info == NULL )
         {
+            // Seems to be the first element for this thread so use it as the start of the list.
             local_info = calloc( 1, sizeof( local_region_info ) );
             local_info->region_handle = region_handle;
             return local_info;
         }
         else
         {
+            // There already are some elements so append the new one at the end of the list.
             current = local_info;
             local_region_info* tmp = calloc( 1, sizeof( local_region_info ) );
             tmp->region_handle = region_handle;
@@ -280,9 +272,16 @@ static local_region_info* get_local_info( uint32_t                              
 }
 
 /**
+ * Thread fork event.
+ *
  * As long as there's more than one thread, there's no save way to make any changes to their common
  * TXT segment. So we have to notice the creation of threads and wait untill all of them have
  * joined.
+ *
+ * @param   scorep_location                 unused
+ * @param   timestamp                       unused
+ * @param   scorep_paradigm                 unused
+ * @param   scorep_thread_team              unused
  */
 static void on_team_begin( __attribute__((unused)) struct SCOREP_Location*          scorep_location,
                            __attribute__((unused)) uint64_t                         timestamp,
@@ -295,7 +294,14 @@ static void on_team_begin( __attribute__((unused)) struct SCOREP_Location*      
 }
 
 /**
- * See above.
+ * Thread join event.
+ *
+ * See on_team_begin.
+ *
+ * @param   scorep_location                 unused
+ * @param   timestamp                       unused
+ * @param   scorep_paradigm                 unused
+ * @param   scorep_thread_team              unused
  */
 static void on_team_end( __attribute__((unused)) struct SCOREP_Location*            scorep_location,
                          __attribute__((unused)) uint64_t                           timestamp,
@@ -317,6 +323,11 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
  *  * multithreaded: Skip deletion and wait untill all threads are joined.
  *  * singlethreaded: Mark the state as deletion ready and hold a mutex so that no new spawned
  *    thread can enter a possibly deleted region.
+ *
+ * @param   scorep_location                 unused
+ * @param   timestamp                       The timestamp of the entry event.
+ * @param   region_handle                   The region that is entered.
+ * @param   metric_values                   unused
  */
 static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*        scorep_location,
                              uint64_t                                               timestamp,
@@ -365,6 +376,11 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
  *
  * This method contains the code for calculating metrics (see on_enter as well) and the actual
  * instrumentation override code.
+ *
+ * @param   scorep_location                 unused
+ * @param   timestamp                       Time of the exit from the region.
+ * @param   region_handle                   The region that is exited.
+ * @param   metric_values                   unused
  */
 static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*         scorep_location,
                             uint64_t                                                timestamp,
@@ -373,6 +389,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 {
     region_info* region = get_region_info( region_handle );
 
+    // If the region already has been deleted, skip the next steps.
     if( !region->inactive )
     {
         local_region_info* info = get_local_info( region_handle );
@@ -395,22 +412,33 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
         }
         else
         {
+            // Region not (yet) ready for deletion so update the metrics.
             region->call_cnt++;
             region->duration += ( timestamp - info->last_enter );
 
-#ifdef FILTERING_RELATIVE
-            region->mean_duration = region->duration / region->call_cnt;
-
-            update_mean_duration( );
-
-            if( region->mean_duration < mean_duration - threshold )
-#endif /* FILTERING_RELATIVE */
-#ifdef FILTERING_ABSOLUTE
-            if( region->duration / region->call_cnt < threshold )
-#endif /* FILTERING_ABSOLUTE */
+            if( filtering_absolute )
             {
-                region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
-                region->deletable = true;
+                // We're filtering absolute so just compare this region's mean duration with the
+                // threshold.
+                if( region->duration / region->call_cnt < threshold )
+                {
+                    region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                    region->deletable = true;
+                }
+            }
+            else
+            {
+                // We're filtering relative so first update all regions' mean durations and then
+                // compare the duration of this region with the mean of all regions.
+                region->mean_duration = region->duration / region->call_cnt;
+
+                update_mean_duration( );
+
+                if( region->mean_duration < mean_duration - threshold )
+                {
+                    region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                    region->deletable = true;
+                }
             }
         }
 
@@ -469,15 +497,30 @@ static void on_init( )
         fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD.\n" );
         exit( EXIT_FAILURE );
     }
+
+    threshold = strtoull( env_str, NULL, 10 );
+    if( threshold == 0 )
+    {
+        fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD or set "
+                         "to 0.\n" );
+        exit( EXIT_FAILURE );
+    }
+
+    // Get the wanted filtering method
+    env_str = getenv( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_METHOD" );
+    if( env_str == NULL )
+    {
+        fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_METHOD.\n" );
+        exit( EXIT_FAILURE );
+    }
+    
+    if( strcmp( env_str, "absolute" ) )
+    {
+        filtering_absolute = true;
+    }
     else
     {
-        threshold = strtoull( env_str, NULL, 10 );
-        if( threshold == 0 )
-        {
-            fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD or set "
-                             "to 0.\n" );
-            exit( EXIT_FAILURE );
-        }
+        filtering_absolute = false;
     }
 }
 
