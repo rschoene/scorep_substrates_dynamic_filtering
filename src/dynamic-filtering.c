@@ -12,8 +12,8 @@
 
 #include <scorep_substrates_definition.h>
 
-/**
- * TODO cleanup
+/*
+ * TODO cleanup thread local storage on join event
  */
 
 /**
@@ -162,7 +162,6 @@ static void override_callq( char*                                               
  */
 static char* get_function_call_ip( const char*                                      function_name )
 {
-    printf( "In SCOREP_DeleteCall, name = %s\n", function_name );
     unw_cursor_t cursor;
     unw_context_t uc;
     unw_word_t ip, offset;
@@ -171,22 +170,57 @@ static char* get_function_call_ip( const char*                                  
     unw_getcontext( &uc );
     unw_init_local( &cursor, &uc );
 
+    // Step up the call path...
     do
     {
+        // ...and check if the current entry has the name given in the parameter.
         if( unw_get_proc_name( &cursor, sym, sizeof( sym ), &offset ) == 0
             && strcmp( sym, function_name ) == 0 )
         {
             unw_step( &cursor );
             unw_get_reg( &cursor, UNW_REG_IP, &ip );
 
+            // UNW_REG_IP is the first byte _after_ the callq so we need to step back 5 bytes.
             return (char*) ( ip - 5 );
         }
     } while( unw_step( &cursor ) > 0 );
 
     // This shouldn't happen, if we're on this point, we tried to delete a function not present in
-    // the current call path.
+    // the current call path. We return zero in this case because delete_regions wont try to delete
+    // this call in this case and we get no undefined behaviour.
     fprintf( stderr, "Function name not found in call path. This shouldn't happen.\n" );
-    return (char*) -1;
+    return (char*) 0;
+}
+
+/**
+ * Remove all unwanted regions.
+ *
+ * This function iterates over all regions and deletes all of them that are marked as deletable.
+ */
+static void delete_regions( )
+{
+    pthread_mutex_lock( &mtx );
+
+    region_info* current = regions;
+
+    while( current != NULL )
+    {
+        // Only delete the function calls if the region is marked as deletable, the address of the
+        // entry function call is correctly set and the address of the exit function call is
+        // correctly set.
+        if( current->deletable && !( current->enter_func == 0 || current->exit_func == 0 ) )
+        {
+            override_callq( current->enter_func );
+            override_callq( current->exit_func );
+            current->inactive = true;
+            fprintf( stderr, "Deleted instrumentation calls for region %d!\n",
+                                                                        current->region_handle );
+        }
+
+        current = current->nxt;
+    }
+
+    pthread_mutex_unlock( &mtx );
 }
 
 /**
@@ -347,10 +381,13 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         info->last_enter = timestamp;
 
         // This region is marked for deletion but not already deleted.
-        if( region->deletable )
+        if( region->deletable && !region->enter_func )
         {
             region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
+        }
 
+        if( !deletion_ready )
+        {
             // Lock all new threads from entering any region.
             pthread_mutex_lock( &deletion_barrier );
 
@@ -361,8 +398,8 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
             }
             else
             {
-                // There are other threads around so deletion is impossible. Unlock the mutex and
-                // carry on.
+                // There are other threads around so deletion is impossible. Unlock the mutex and carry
+                // on.
                 pthread_mutex_unlock( &deletion_barrier );
             }
         }
@@ -387,58 +424,51 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                             SCOREP_RegionHandle                                     region_handle,
                             __attribute__((unused)) uint64_t*                       metric_values )
 {
+    if( deletion_ready )
+    {
+        // The current state is ready for deletion, so delete all regions ready for deletion.
+        delete_regions( );
+        // Reset the deletion ready flag
+        deletion_ready = false;
+        // Reset mutex so normal program flow can be reached again.
+        pthread_mutex_unlock( &deletion_barrier );
+    }
+
     region_info* region = get_region_info( region_handle );
 
-    // If the region already has been deleted, skip the next steps.
-    if( !region->inactive )
+    // If the region already has been deleted or marked as deletable, skip the next steps.
+    if( !region->inactive && !region->deletable )
     {
         local_region_info* info = get_local_info( region_handle );
 
         pthread_mutex_lock( &mtx );
 
-        // Region is marked as deletable...
-        if( region->deletable )
+        // Region not (yet) ready for deletion so update the metrics.
+        region->call_cnt++;
+        region->duration += ( timestamp - info->last_enter );
+
+        if( filtering_absolute )
         {
-            // ...and the current state is ready for deletion
-            if( deletion_ready == true )
+            // We're filtering absolute so just compare this region's mean duration with the
+            // threshold.
+            if( region->duration / region->call_cnt < threshold )
             {
-                // Set region to inactive so further processing of this region is skipped.
-                region->inactive = true;
-                // Reset the deletion ready flag
-                deletion_ready = false;
-                // Reset mutex so normal program flow can be reached again.
-                pthread_mutex_unlock( &deletion_barrier );
+                fprintf( stderr, "Exit for %d\n", region_handle );
+                region->deletable = true;
             }
         }
         else
         {
-            // Region not (yet) ready for deletion so update the metrics.
-            region->call_cnt++;
-            region->duration += ( timestamp - info->last_enter );
+            // We're filtering relative so first update all regions' mean durations and then compare
+            // the duration of this region with the mean of all regions.
+            region->mean_duration = region->duration / region->call_cnt;
 
-            if( filtering_absolute )
+            update_mean_duration( );
+
+            if( region->mean_duration < mean_duration - threshold )
             {
-                // We're filtering absolute so just compare this region's mean duration with the
-                // threshold.
-                if( region->duration / region->call_cnt < threshold )
-                {
-                    region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
-                    region->deletable = true;
-                }
-            }
-            else
-            {
-                // We're filtering relative so first update all regions' mean durations and then
-                // compare the duration of this region with the mean of all regions.
-                region->mean_duration = region->duration / region->call_cnt;
-
-                update_mean_duration( );
-
-                if( region->mean_duration < mean_duration - threshold )
-                {
-                    region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
-                    region->deletable = true;
-                }
+                region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                region->deletable = true;
             }
         }
 
@@ -513,7 +543,7 @@ static void on_init( )
         fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_METHOD.\n" );
         exit( EXIT_FAILURE );
     }
-    
+
     if( strcmp( env_str, "absolute" ) )
     {
         filtering_absolute = true;
