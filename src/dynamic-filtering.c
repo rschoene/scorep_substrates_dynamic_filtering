@@ -12,10 +12,6 @@
 
 #include <scorep_substrates_definition.h>
 
-/*
- * TODO cleanup thread local storage on join event
- */
-
 /**
  * Stores region info.
  */
@@ -345,6 +341,19 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
     pthread_mutex_lock( &deletion_barrier );
     thread_ctr--;
     pthread_mutex_unlock( &deletion_barrier );
+
+    // Free the thread local storage
+    local_region_info* current = local_info;
+    local_region_info* tmp;
+
+    while( current != NULL )
+    {
+        tmp = current;
+        current = current->nxt;
+        free( tmp );
+    }
+
+    local_info = NULL;
 }
 
 /**
@@ -570,6 +579,8 @@ static void on_finalize( )
         current = current->nxt;
         free( tmp );
     }
+
+    regions = NULL;
 }
 
 SCOREP_Substrates_Callback** SCOREP_SubstratePlugin_dynamic_filtering_plugin_get_event_callbacks( )
