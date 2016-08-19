@@ -544,7 +544,7 @@ static void on_init( )
         exit( EXIT_FAILURE );
     }
 
-    if( strcmp( env_str, "absolute" ) )
+    if( strcmp( env_str, "absolute" ) == 0 )
     {
         filtering_absolute = true;
     }
