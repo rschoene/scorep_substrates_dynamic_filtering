@@ -27,8 +27,12 @@ typedef struct region_info
     char* enter_func;
     /** Pointer to the callq for the exit instrumentation function */
     char* exit_func;
+    /** Human readable name of the region */
+    const char* region_name;
     /** Handle identifying the region */
     uint32_t region_handle;
+    /** Recursion depth in this region */
+    uint32_t depth;
     /** Mean region duration used for comparison */
     float mean_duration;
     /** Marks whether the region is deletable */
@@ -173,7 +177,6 @@ static char* get_function_call_ip( const char*                                  
         if( unw_get_proc_name( &cursor, sym, sizeof( sym ), &offset ) == 0
             && strcmp( sym, function_name ) == 0 )
         {
-            unw_step( &cursor );
             unw_get_reg( &cursor, UNW_REG_IP, &ip );
 
             // UNW_REG_IP is the first byte _after_ the callq so we need to step back 5 bytes.
@@ -204,13 +207,13 @@ static void delete_regions( )
         // Only delete the function calls if the region is marked as deletable, the address of the
         // entry function call is correctly set and the address of the exit function call is
         // correctly set.
-        if( current->deletable && !( current->enter_func == 0 || current->exit_func == 0 ) )
+        if( current->deletable && !( current->enter_func == 0 || current->exit_func == 0 ) && current->depth == 1 )
         {
             override_callq( current->enter_func );
             override_callq( current->exit_func );
             current->inactive = true;
-            fprintf( stderr, "Deleted instrumentation calls for region %d!\n",
-                                                                        current->region_handle );
+            fprintf( stderr, "Deleted instrumentation calls for region %s!\n",
+                                                                        current->region_name );
         }
 
         current = current->nxt;
@@ -384,19 +387,25 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
     {
         local_region_info* info = get_local_info( region_handle );
 
-        pthread_mutex_lock( &mtx );
-
         // Store the last (this) entry for the current thread.
         info->last_enter = timestamp;
+
+        //fprintf( stderr, "Waiting for mtx in enter (%d)\n", region_handle );
+        pthread_mutex_lock( &mtx );
+
+        region->depth++;
 
         // This region is marked for deletion but not already deleted.
         if( region->deletable && !region->enter_func )
         {
-            region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
+            region->enter_func = get_function_call_ip( region->region_name );
         }
 
-        if( !deletion_ready )
+        pthread_mutex_unlock( &mtx );
+
+        if( thread_ctr == 0 && !deletion_ready )
         {
+            fprintf( stderr, "Waiting for deletion barrier.\n" );
             // Lock all new threads from entering any region.
             pthread_mutex_lock( &deletion_barrier );
 
@@ -412,8 +421,6 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
                 pthread_mutex_unlock( &deletion_barrier );
             }
         }
-
-        pthread_mutex_unlock( &mtx );
     }
 }
 
@@ -444,12 +451,14 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
     }
 
     region_info* region = get_region_info( region_handle );
+    region->depth--;
 
     // If the region already has been deleted or marked as deletable, skip the next steps.
     if( !region->inactive && !region->deletable )
     {
         local_region_info* info = get_local_info( region_handle );
 
+        //fprintf( stderr, "Waiting for mtx in exit (%d).\n", region_handle );
         pthread_mutex_lock( &mtx );
 
         // Region not (yet) ready for deletion so update the metrics.
@@ -462,7 +471,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
             // threshold.
             if( region->duration / region->call_cnt < threshold )
             {
-                fprintf( stderr, "Exit for %d\n", region_handle );
+                region->exit_func = get_function_call_ip( region->region_name );
                 region->deletable = true;
             }
         }
@@ -476,7 +485,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 
             if( region->mean_duration < mean_duration - threshold )
             {
-                region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                region->exit_func = get_function_call_ip( region->region_name );
                 region->deletable = true;
             }
         }
@@ -511,12 +520,14 @@ static void on_define_region( __attribute__((unused)) const char*               
     {
         regions = calloc( 1, sizeof( region_info ) );
         regions->region_handle = region_handle;
+        regions->region_name = region_name;
     }
     else
     {
         last->nxt = calloc( 1, sizeof( region_info ) );
         current = last->nxt;
         current->region_handle = region_handle;
+        current->region_name = region_name;
     }
 
     pthread_mutex_unlock( &mtx );
