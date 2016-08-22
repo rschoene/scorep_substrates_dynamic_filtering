@@ -16,5 +16,5 @@ if(BUILD_DEBUG)
     add_definitions("-ggdb")
 endif()
 
-include_directories(${SCOREP_INCLUDE_DIRS}/include ${SCOREP_INCLUDE_DIRS}/src/measurement/substrates/include ${SCOREP_INCLUDE_DIRS}/src/measurement/definitions/include ${SCOREP_INCLUDE_DIRS}/src/measurement/include ${SCOREP_INCLUDE_DIRS}/vendor/common/src/utils/include)
+include_directories( ${PROJECT_SOURCE_DIR}/src/ ${SCOREP_INCLUDE_DIRS}/include ${SCOREP_INCLUDE_DIRS}/src/measurement/substrates/include ${SCOREP_INCLUDE_DIRS}/src/measurement/definitions/include ${SCOREP_INCLUDE_DIRS}/src/measurement/include ${SCOREP_INCLUDE_DIRS}/vendor/common/src/utils/include)
 add_library(${PROJECT_NAME} SHARED ${PLUGIN_SOURCE_FILES})

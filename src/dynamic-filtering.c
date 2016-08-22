@@ -12,6 +12,8 @@
 
 #include <scorep_substrates_definition.h>
 
+#include "uthash.h"
+
 /**
  * Stores region info.
  */
@@ -21,8 +23,8 @@ typedef struct region_info
     uint64_t call_cnt;
     /** Global calculated region duration */
     uint64_t duration;
-    /** Linked list next pointer */
-    struct region_info* nxt;
+    /** Handle for uthash usage */
+    UT_hash_handle hh;
     /** Pointer to the callq for the enter instrumentation function */
     char* enter_func;
     /** Pointer to the callq for the exit instrumentation function */
@@ -63,6 +65,9 @@ region_info* regions = NULL;
 /** Thread local region info */
 __thread local_region_info* local_info = NULL;
 
+/** Read/write lock for accessing the global region info */
+pthread_rwlock_t rwlock;
+
 /** General mutex used as a guard for writing region info */
 pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 
@@ -91,16 +96,16 @@ float mean_duration = 0;
  */
 static void update_mean_duration( )
 {
-    region_info* current = regions;
+    region_info *current, *tmp;
     uint64_t ctr = 1;
-    float new_duration = current->mean_duration;
+    float new_duration = 0;
 
-    while( current->nxt != NULL )
+    pthread_rwlock_rdlock( &rwlock );
+    HASH_ITER( hh, regions, current, tmp )
     {
-        current = current->nxt;
-        ctr++;
         new_duration += current->mean_duration;
     }
+    pthread_rwlock_unlock( &rwlock );
 
     mean_duration = new_duration / ctr;
 }
@@ -187,7 +192,6 @@ static char* get_function_call_ip( const char*                                  
     // This shouldn't happen, if we're on this point, we tried to delete a function not present in
     // the current call path. We return zero in this case because delete_regions wont try to delete
     // this call in this case and we get no undefined behaviour.
-    fprintf( stderr, "Function name not found in call path. This shouldn't happen.\n" );
     return (char*) 0;
 }
 
@@ -198,11 +202,10 @@ static char* get_function_call_ip( const char*                                  
  */
 static void delete_regions( )
 {
-    pthread_mutex_lock( &mtx );
+    region_info *current, *tmp;
 
-    region_info* current = regions;
-
-    while( current != NULL )
+    pthread_rwlock_wrlock( &rwlock );
+    HASH_ITER( hh, regions, current, tmp )
     {
         // Only delete the function calls if the region is marked as deletable, the address of the
         // entry function call is correctly set and the address of the exit function call is
@@ -215,31 +218,8 @@ static void delete_regions( )
             fprintf( stderr, "Deleted instrumentation calls for region %s!\n",
                                                                         current->region_name );
         }
-
-        current = current->nxt;
     }
-
-    pthread_mutex_unlock( &mtx );
-}
-
-/**
- * Get internal pointer to region info for given region handle.
- *
- * @param   region_handle                   The region to look up.
- *
- * @return                                  The corresponding region info.
- */
-static inline region_info* get_region_info( uint32_t                                region_handle )
-{
-    region_info* current_region = regions;
-
-    // Select the correct region
-    while( current_region->region_handle != region_handle )
-    {
-        current_region = current_region->nxt;
-    }
-
-    return current_region;
+    pthread_rwlock_unlock( &rwlock );
 }
 
 /**
@@ -380,7 +360,9 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
                              SCOREP_RegionHandle                                    region_handle,
                              __attribute__((unused)) uint64_t*                      metric_values )
 {
-    region_info* region = get_region_info( region_handle );
+    region_info* region;
+    pthread_rwlock_wrlock( &rwlock );
+    HASH_FIND( hh, regions, &region_handle,  sizeof( uint32_t ), region );
 
     // If the current region is already deleted, skip this whole thing.
     if( !region->inactive )
@@ -390,9 +372,6 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         // Store the last (this) entry for the current thread.
         info->last_enter = timestamp;
 
-        //fprintf( stderr, "Waiting for mtx in enter (%d)\n", region_handle );
-        pthread_mutex_lock( &mtx );
-
         region->depth++;
 
         // This region is marked for deletion but not already deleted.
@@ -400,8 +379,6 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         {
             region->enter_func = get_function_call_ip( region->region_name );
         }
-
-        pthread_mutex_unlock( &mtx );
 
         if( thread_ctr == 0 && !deletion_ready )
         {
@@ -422,6 +399,7 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
             }
         }
     }
+    pthread_rwlock_unlock( &rwlock );
 }
 
 /**
@@ -450,16 +428,16 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
         pthread_mutex_unlock( &deletion_barrier );
     }
 
-    region_info* region = get_region_info( region_handle );
+    region_info* region;
+    pthread_rwlock_wrlock( &rwlock );
+    HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
+
     region->depth--;
 
     // If the region already has been deleted or marked as deletable, skip the next steps.
     if( !region->inactive && !region->deletable )
     {
         local_region_info* info = get_local_info( region_handle );
-
-        //fprintf( stderr, "Waiting for mtx in exit (%d).\n", region_handle );
-        pthread_mutex_lock( &mtx );
 
         // Region not (yet) ready for deletion so update the metrics.
         region->call_cnt++;
@@ -489,9 +467,8 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                 region->deletable = true;
             }
         }
-
-        pthread_mutex_unlock( &mtx );
     }
+    pthread_rwlock_unlock( &rwlock );
 }
 
 /**
@@ -505,32 +482,13 @@ static void on_define_region( __attribute__((unused)) const char*               
                               __attribute__((unused)) SCOREP_RegionType             region_type,
                               SCOREP_RegionHandle                                   region_handle )
 {
-    pthread_mutex_lock( &mtx );
+    region_info* new = calloc( 1, sizeof( region_info ) );
+    new->region_handle = region_handle;
+    new->region_name = region_name;
 
-    region_info* last = NULL;
-    region_info* current = regions;
-
-    while( current != NULL )
-    {
-        last = current;
-        current = current->nxt;
-    }
-
-    if( last == NULL )
-    {
-        regions = calloc( 1, sizeof( region_info ) );
-        regions->region_handle = region_handle;
-        regions->region_name = region_name;
-    }
-    else
-    {
-        last->nxt = calloc( 1, sizeof( region_info ) );
-        current = last->nxt;
-        current->region_handle = region_handle;
-        current->region_name = region_name;
-    }
-
-    pthread_mutex_unlock( &mtx );
+    pthread_rwlock_wrlock( &rwlock );
+    HASH_ADD( hh, regions, region_handle, sizeof( uint32_t ), new );
+    pthread_rwlock_unlock( &rwlock );
 }
 
 /**
@@ -540,6 +498,13 @@ static void on_define_region( __attribute__((unused)) const char*               
  */
 static void on_init( )
 {
+    // Initialize the read/write lock
+    if( pthread_rwlock_init( &rwlock, NULL ) != 0 )
+    {
+        fprintf( stderr, "Unable to create read/write lock.\n" );
+        exit( EXIT_FAILURE );
+    }
+
     // Get the threshold for filtering
     char* env_str = getenv( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD" );
     if( env_str == NULL )
@@ -581,17 +546,13 @@ static void on_init( )
  */
 static void on_finalize( )
 {
-    region_info* current = regions;
-    region_info* tmp;
+    region_info *current, *tmp;
 
-    while( current != NULL )
+    HASH_ITER( hh, regions, current, tmp )
     {
-        tmp = current;
-        current = current->nxt;
-        free( tmp );
+        HASH_DEL( regions, current );
+        free( current );
     }
-
-    regions = NULL;
 }
 
 SCOREP_Substrates_Callback** SCOREP_SubstratePlugin_dynamic_filtering_plugin_get_event_callbacks( )
