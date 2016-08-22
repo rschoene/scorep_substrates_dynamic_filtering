@@ -53,8 +53,8 @@ typedef struct local_region_info
 {
     /** Timestamp of last enter into this region */
     uint64_t last_enter;
-    /** Linked list next pointer */
-    struct local_region_info* nxt;
+    /** Handle for uthash usage */
+    UT_hash_handle hh;
     /** Region id this info belongs to */
     uint32_t region_handle;
 } local_region_info;
@@ -236,52 +236,20 @@ static void delete_regions( )
  */
 static local_region_info* get_local_info( uint32_t                                  region_handle )
 {
-    local_region_info* current = local_info;
+    local_region_info* ret;
 
-    // Find the correct local region info
-    while( current != NULL )
+    // Try to find an already existant local info object.
+    HASH_FIND( hh, local_info, &region_handle, sizeof( uint32_t ), ret );
+
+    // If we haven't found it, create a new one and append it to the hash table.
+    if( ret == NULL )
     {
-        if( current->region_handle == region_handle )
-        {
-            break;
-        }
-        else
-        {
-            current = current->nxt;
-        }
+        ret = calloc( 1, sizeof( local_region_info ) );
+        ret->region_handle = region_handle;
+        HASH_ADD( hh, local_info, region_handle, sizeof( uint32_t ), ret );
     }
 
-    if( current != NULL )
-    {
-        // We've found it? Return it!
-        return current;
-    }
-    else
-    {
-        // We haven't found it? Create a new one and append it correctly to our thread local list.
-        if( local_info == NULL )
-        {
-            // Seems to be the first element for this thread so use it as the start of the list.
-            local_info = calloc( 1, sizeof( local_region_info ) );
-            local_info->region_handle = region_handle;
-            return local_info;
-        }
-        else
-        {
-            // There already are some elements so append the new one at the end of the list.
-            current = local_info;
-            local_region_info* tmp = calloc( 1, sizeof( local_region_info ) );
-            tmp->region_handle = region_handle;
-
-            while( current->nxt != NULL )
-            {
-                current = current->nxt;
-            }
-
-            current->nxt = tmp;
-            return tmp;
-        }
-    }
+    return ret;
 }
 
 /**
@@ -326,14 +294,12 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
     pthread_mutex_unlock( &deletion_barrier );
 
     // Free the thread local storage
-    local_region_info* current = local_info;
-    local_region_info* tmp;
+    local_region_info *current, *tmp;
 
-    while( current != NULL )
+    HASH_ITER( hh, local_info, current, tmp )
     {
-        tmp = current;
-        current = current->nxt;
-        free( tmp );
+        HASH_DEL( local_info, current );
+        free( current );
     }
 
     local_info = NULL;
@@ -553,6 +519,8 @@ static void on_finalize( )
         HASH_DEL( regions, current );
         free( current );
     }
+
+    regions = NULL;
 }
 
 SCOREP_Substrates_Callback** SCOREP_SubstratePlugin_dynamic_filtering_plugin_get_event_callbacks( )
