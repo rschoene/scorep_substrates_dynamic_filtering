@@ -339,7 +339,7 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
                              __attribute__((unused)) uint64_t*                      metric_values )
 {
     region_info* region;
-    pthread_rwlock_wrlock( &rwlock );
+    pthread_mutex_lock( &mtx );
     HASH_FIND( hh, regions, &region_handle,  sizeof( uint32_t ), region );
 
     // If the current region is already deleted, skip this whole thing.
@@ -358,7 +358,7 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
             region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
         }
     }
-    pthread_rwlock_unlock( &rwlock );
+    pthread_mutex_unlock( &mtx );
 }
 
 /**
@@ -378,7 +378,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                             __attribute__((unused)) uint64_t*                       metric_values )
 {
     region_info* region;
-    pthread_rwlock_wrlock( &rwlock );
+    pthread_mutex_lock( &mtx );
     HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
 
     region->depth--;
@@ -417,7 +417,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
             }
         }
     }
-    pthread_rwlock_unlock( &rwlock );
+    pthread_mutex_unlock( &mtx );
 
     pthread_mutex_lock( &deletion_barrier );
     if( thread_ctr == 0 )
@@ -449,9 +449,9 @@ static void on_define_region( const char*                                       
     new->region_handle = region_handle;
     new->region_name = region_name;
 
-    pthread_rwlock_wrlock( &rwlock );
+    pthread_mutex_lock( &mtx );
     HASH_ADD( hh, regions, region_handle, sizeof( uint32_t ), new );
-    pthread_rwlock_unlock( &rwlock );
+    pthread_mutex_unlock( &mtx );
 }
 
 /**
