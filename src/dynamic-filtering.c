@@ -51,6 +51,10 @@ typedef struct region_info
  */
 typedef struct local_region_info
 {
+    /** Global counter for region entries */
+    uint64_t call_cnt;
+    /** Global calculated region duration */
+    uint64_t duration;
     /** Timestamp of last enter into this region */
     uint64_t last_enter;
     /** Handle for uthash usage */
@@ -89,6 +93,9 @@ unsigned long long threshold = 0;
 /** Mean duration across all regions */
 float mean_duration = 0;
 
+/** Flag indicating that this current thread is the main thread */
+__thread bool main_thread = true;
+
 /**
  * Update the mean duration of all regions.
  *
@@ -100,12 +107,10 @@ static void update_mean_duration( )
     uint64_t ctr = 1;
     float new_duration = 0;
 
-    pthread_rwlock_rdlock( &rwlock );
     HASH_ITER( hh, regions, current, tmp )
     {
         new_duration += current->mean_duration;
     }
-    pthread_rwlock_unlock( &rwlock );
 
     mean_duration = new_duration / ctr;
 }
@@ -283,6 +288,7 @@ static void on_team_begin( __attribute__((unused)) struct SCOREP_Location*      
 {
     pthread_mutex_lock( &deletion_barrier );
     thread_ctr++;
+    main_thread = false;
     pthread_mutex_unlock( &deletion_barrier );
 }
 
@@ -303,16 +309,23 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
 {
     pthread_mutex_lock( &deletion_barrier );
     thread_ctr--;
-    pthread_mutex_unlock( &deletion_barrier );
 
-    // Free the thread local storage
+    // Copy the thread local info into the global table and free the thread local storage
+    region_info* to_change;
     local_region_info *current, *tmp;
 
     HASH_ITER( hh, local_info, current, tmp )
     {
+        HASH_FIND( hh, regions, &current->region_handle, sizeof( uint32_t ), to_change );
+
+        to_change->call_cnt += current->call_cnt;
+        to_change->duration += current->duration;
+
         HASH_DEL( local_info, current );
         free( current );
     }
+
+    pthread_mutex_unlock( &deletion_barrier );
 
     local_info = NULL;
 }
@@ -338,27 +351,30 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
                              SCOREP_RegionHandle                                    region_handle,
                              __attribute__((unused)) uint64_t*                      metric_values )
 {
-    region_info* region;
-    pthread_mutex_lock( &mtx );
-    HASH_FIND( hh, regions, &region_handle,  sizeof( uint32_t ), region );
+    local_region_info* info = get_local_info( region_handle );
 
-    // If the current region is already deleted, skip this whole thing.
-    if( !region->inactive )
+    // Store the last (this) entry for the current thread.
+    info->last_enter = timestamp;
+
+    if( main_thread )
     {
-        local_region_info* info = get_local_info( region_handle );
+        region_info* region;
+        pthread_mutex_lock( &mtx );
+        HASH_FIND( hh, regions, &region_handle,  sizeof( uint32_t ), region );
 
-        // Store the last (this) entry for the current thread.
-        info->last_enter = timestamp;
-
-        region->depth++;
-
-        // This region is marked for deletion but not already deleted.
-        if( !region->enter_func )
+        // If the current region is already deleted, skip this whole thing.
+        if( !region->inactive )
         {
-            region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
+            region->depth++;
+
+            // This region is marked for deletion but not already deleted.
+            if( !region->enter_func )
+            {
+                region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
+            }
         }
+        pthread_mutex_unlock( &mtx );
     }
-    pthread_mutex_unlock( &mtx );
 }
 
 /**
@@ -377,54 +393,60 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                             SCOREP_RegionHandle                                     region_handle,
                             __attribute__((unused)) uint64_t*                       metric_values )
 {
-    region_info* region;
-    pthread_mutex_lock( &mtx );
-    HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
+    local_region_info* info = get_local_info( region_handle );
 
-    region->depth--;
-
-    // If the region already has been deleted or marked as deletable, skip the next steps.
-    if( !region->inactive && !region->deletable )
+    if( main_thread )
     {
-        local_region_info* info = get_local_info( region_handle );
+        pthread_mutex_lock( &deletion_barrier );
+        region_info* region;
+        HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
 
-        // Region not (yet) ready for deletion so update the metrics.
         region->call_cnt++;
         region->duration += ( timestamp - info->last_enter );
+        region->depth--;
 
-        if( filtering_absolute )
+        // If the region already has been deleted or marked as deletable, skip the next steps.
+        if( !region->inactive && !region->deletable )
         {
-            // We're filtering absolute so just compare this region's mean duration with the
-            // threshold.
-            if( region->duration / region->call_cnt < threshold )
+
+            if( filtering_absolute )
             {
-                region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
-                region->deletable = true;
+                // We're filtering absolute so just compare this region's mean duration with the
+                // threshold.
+                if( region->duration / region->call_cnt < threshold )
+                {
+                    region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                    region->deletable = true;
+                }
+            }
+            else
+            {
+                // We're filtering relative so first update all regions' mean durations and then
+                // compare the duration of this region with the mean of all regions.
+                region->mean_duration = region->duration / region->call_cnt;
+
+                update_mean_duration( );
+
+                if( region->mean_duration < mean_duration - threshold )
+                {
+                    region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                    region->deletable = true;
+                }
             }
         }
-        else
+
+        if( thread_ctr == 0 )
         {
-            // We're filtering relative so first update all regions' mean durations and then compare
-            // the duration of this region with the mean of all regions.
-            region->mean_duration = region->duration / region->call_cnt;
-
-            update_mean_duration( );
-
-            if( region->mean_duration < mean_duration - threshold )
-            {
-                region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
-                region->deletable = true;
-            }
+            delete_regions( );
         }
+        pthread_mutex_unlock( &deletion_barrier );
     }
-    pthread_mutex_unlock( &mtx );
-
-    pthread_mutex_lock( &deletion_barrier );
-    if( thread_ctr == 0 )
+    else
     {
-        delete_regions( );
+        // Region not (yet) ready for deletion so update the metrics.
+        info->call_cnt++;
+        info->duration += ( timestamp - info->last_enter );
     }
-    pthread_mutex_unlock( &deletion_barrier );
 }
 
 /**
