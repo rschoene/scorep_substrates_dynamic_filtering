@@ -198,19 +198,23 @@ static char* get_function_call_ip( const char*                                  
 /**
  * Remove all unwanted regions.
  *
- * This function iterates over all regions and deletes all of them that are marked as deletable.
+ * This function iterates over all regions and deletes all of them that are marked as deletable. The
+ * iteration over the elements isn't guarded by locks because the program's semantic ensures that
+ * this function is only called when there's only one thread present.
  */
 static void delete_regions( )
 {
     region_info *current, *tmp;
 
-    pthread_rwlock_wrlock( &rwlock );
     HASH_ITER( hh, regions, current, tmp )
     {
         // Only delete the function calls if the region is marked as deletable, the address of the
         // entry function call is correctly set and the address of the exit function call is
         // correctly set.
-        if( current->deletable && !( current->enter_func == 0 || current->exit_func == 0 ) && current->depth == 1 )
+        if( current->deletable
+         && !current->inactive
+         && current->depth == 0
+         && !( current->enter_func == 0 || current->exit_func == 0 ) )
         {
             override_callq( current->enter_func );
             override_callq( current->exit_func );
@@ -219,7 +223,6 @@ static void delete_regions( )
                                                                         current->region_name );
         }
     }
-    pthread_rwlock_unlock( &rwlock );
 }
 
 /**
