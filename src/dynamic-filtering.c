@@ -92,7 +92,7 @@ float mean_duration = 0;
 /**
  * Update the mean duration of all regions.
  *
- * Only used if the plugin is compiled with FILTERING_RELATIVE.
+ * Only used if the plugin uses the relative filtering method.
  */
 static void update_mean_duration( )
 {
@@ -430,7 +430,14 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 /**
  * Call on Score-P's region definition event.
  *
- * Creates a new region_info struct in the globel regions list for the newly defined region.
+ * Creates a new region_info struct in the global regions table for the newly defined region.
+ *
+ * @param   region_name                     Human readable region name. Used for output on deletion.
+ * @param   region_canonical_name           unused
+ * @param   paradigm_type                   unused
+ * @param   region_type                     unused
+ * @param   region_handle                   Numeric identifier for this region. Used for internal
+ *                                          identification.
  */
 static void on_define_region( const char*                                           region_name,
                               __attribute__((unused)) const char*                   region_canonical_name,
