@@ -175,19 +175,28 @@ static char* get_function_call_ip( const char*                                  
     unw_getcontext( &uc );
     unw_init_local( &cursor, &uc );
 
+    bool found = false;
+
     // Step up the call path...
-    do
+    while( unw_step( &cursor ) > 0 )
     {
         // ...and check if the current entry has the name given in the parameter.
-        if( unw_get_proc_name( &cursor, sym, sizeof( sym ), &offset ) == 0
-            && strcmp( sym, function_name ) == 0 )
-        {
-            unw_get_reg( &cursor, UNW_REG_IP, &ip );
+        unw_get_proc_name( &cursor, sym, sizeof( sym ), &offset );
 
+        // We need to get the last (in up direction) call to the function to avoid deleting of
+        // intermediate jumps within the function as libunwind does not report them any different.
+        if( strcmp( sym, function_name ) == 0 )
+        {
+            found = true;
+        }
+
+        if( found && strcmp( sym, function_name ) != 0 )
+        {
             // UNW_REG_IP is the first byte _after_ the callq so we need to step back 5 bytes.
+            unw_get_reg( &cursor, UNW_REG_IP, &ip );
             return (char*) ( ip - 5 );
         }
-    } while( unw_step( &cursor ) > 0 );
+    }
 
     // This shouldn't happen, if we're on this point, we tried to delete a function not present in
     // the current call path. We return zero in this case because delete_regions wont try to delete
@@ -212,9 +221,9 @@ static void delete_regions( )
         // entry function call is correctly set and the address of the exit function call is
         // correctly set.
         if( current->deletable
-         && !current->inactive
-         && current->depth == 0
-         && !( current->enter_func == 0 || current->exit_func == 0 ) )
+            && !current->inactive
+            && current->depth == 0
+            && !( current->enter_func == 0 || current->exit_func == 0 ) )
         {
             override_callq( current->enter_func );
             override_callq( current->exit_func );
@@ -344,28 +353,9 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         region->depth++;
 
         // This region is marked for deletion but not already deleted.
-        if( region->deletable && !region->enter_func )
+        if( !region->enter_func )
         {
-            region->enter_func = get_function_call_ip( region->region_name );
-        }
-
-        if( thread_ctr == 0 && !deletion_ready )
-        {
-            fprintf( stderr, "Waiting for deletion barrier.\n" );
-            // Lock all new threads from entering any region.
-            pthread_mutex_lock( &deletion_barrier );
-
-            if( thread_ctr == 0 )
-            {
-                // We're the only thread, so keep the mutex and mark that we're deletion ready.
-                deletion_ready = true;
-            }
-            else
-            {
-                // There are other threads around so deletion is impossible. Unlock the mutex and carry
-                // on.
-                pthread_mutex_unlock( &deletion_barrier );
-            }
+            region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
         }
     }
     pthread_rwlock_unlock( &rwlock );
@@ -387,16 +377,6 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                             SCOREP_RegionHandle                                     region_handle,
                             __attribute__((unused)) uint64_t*                       metric_values )
 {
-    if( deletion_ready )
-    {
-        // The current state is ready for deletion, so delete all regions ready for deletion.
-        delete_regions( );
-        // Reset the deletion ready flag
-        deletion_ready = false;
-        // Reset mutex so normal program flow can be reached again.
-        pthread_mutex_unlock( &deletion_barrier );
-    }
-
     region_info* region;
     pthread_rwlock_wrlock( &rwlock );
     HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
@@ -418,7 +398,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
             // threshold.
             if( region->duration / region->call_cnt < threshold )
             {
-                region->exit_func = get_function_call_ip( region->region_name );
+                region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
                 region->deletable = true;
             }
         }
@@ -432,12 +412,19 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 
             if( region->mean_duration < mean_duration - threshold )
             {
-                region->exit_func = get_function_call_ip( region->region_name );
+                region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
                 region->deletable = true;
             }
         }
     }
     pthread_rwlock_unlock( &rwlock );
+
+    pthread_mutex_lock( &deletion_barrier );
+    if( thread_ctr == 0 )
+    {
+        delete_regions( );
+    }
+    pthread_mutex_unlock( &deletion_barrier );
 }
 
 /**
