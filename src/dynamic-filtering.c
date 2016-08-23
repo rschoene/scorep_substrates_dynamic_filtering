@@ -445,7 +445,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
  *
  * Creates a new region_info struct in the globel regions list for the newly defined region.
  */
-static void on_define_region( __attribute__((unused)) const char*                   region_name,
+static void on_define_region( const char*                                           region_name,
                               __attribute__((unused)) const char*                   region_canonical_name,
                               __attribute__((unused)) SCOREP_ParadigmType           paradigm_type,
                               __attribute__((unused)) SCOREP_RegionType             region_type,
