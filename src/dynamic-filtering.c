@@ -406,7 +406,11 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
         region->depth--;
 
         // If the region already has been deleted or marked as deletable, skip the next steps.
+#ifdef DYNAMIC_FILTERING_DEBUG
+        if( !region->inactive )
+#else
         if( !region->inactive && !region->deletable )
+#endif
         {
 
             if( filtering_absolute )
@@ -541,10 +545,29 @@ static void on_init( )
  */
 static void on_finalize( )
 {
+#ifdef DYNAMIC_FILTERING_DEBUG
+    fprintf( stderr, "\n\nFinalizing.\n\n\n" );
+    fprintf( stderr, "Global mean duration: %f\n\n", mean_duration );
+    fprintf( stderr, "|                  Region Name                  "
+                     "| Region handle "
+                     "| Call count "
+                     "|        Duration        "
+                     "|   Mean duration  "
+                     "|   Status  |\n" );
+#endif
     region_info *current, *tmp;
 
     HASH_ITER( hh, regions, current, tmp )
     {
+#ifdef DYNAMIC_FILTERING_DEBUG
+        fprintf( stderr, "| %-45s | %13d | %10lu | %22lu | %16f | %-9s |\n",
+                    current->region_name,
+                    current->region_handle,
+                    current->call_cnt,
+                    current->duration,
+                    current->mean_duration,
+                    current->deletable ? ( current->inactive ? "deleted" : "deletable" ) : " " );
+#endif
         HASH_DEL( regions, current );
         free( current );
     }

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8)
 project(dynamic_filtering_plugin)
 
-option(BUILD_DEBUG "Include debugging symbols in library." OFF)
+option(BUILD_DEBUG "Include debugging symbols in library and print some usefull output on execution." OFF)
 option(SCOREP_INCLUDE_DIRS "Path to Score-P sources." "")
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/common)
@@ -13,7 +13,7 @@ set(PLUGIN_SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/dynamic-filtering.c)
 add_definitions("-Wall -Wextra -pedantic -std=c11")
 
 if(BUILD_DEBUG)
-    add_definitions("-ggdb")
+	add_definitions("-ggdb -DDYNAMIC_FILTERING_DEBUG")
 endif()
 
 include_directories( ${PROJECT_SOURCE_DIR}/src/ ${SCOREP_INCLUDE_DIRS}/include ${SCOREP_INCLUDE_DIRS}/src/measurement/substrates/include ${SCOREP_INCLUDE_DIRS}/src/measurement/definitions/include ${SCOREP_INCLUDE_DIRS}/src/measurement/include ${SCOREP_INCLUDE_DIRS}/vendor/common/src/utils/include)
