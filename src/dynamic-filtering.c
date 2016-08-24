@@ -30,7 +30,7 @@ typedef struct region_info
     /** Pointer to the callq for the exit instrumentation function */
     char* exit_func;
     /** Human readable name of the region */
-    const char* region_name;
+    char* region_name;
     /** Handle identifying the region */
     uint32_t region_handle;
     /** Recursion depth in this region */
@@ -467,13 +467,23 @@ static void on_define_region( const char*                                       
                               __attribute__((unused)) SCOREP_RegionType             region_type,
                               SCOREP_RegionHandle                                   region_handle )
 {
-    region_info* new = calloc( 1, sizeof( region_info ) );
-    new->region_handle = region_handle;
-    new->region_name = region_name;
+    region_info* new;
 
-    pthread_mutex_lock( &mtx );
-    HASH_ADD( hh, regions, region_handle, sizeof( uint32_t ), new );
-    pthread_mutex_unlock( &mtx );
+    HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), new );
+    if( new == NULL )
+    {
+        new = calloc( 1, sizeof( region_info ) );
+        new->region_handle = region_handle;
+        new->region_name = calloc( 1, strlen( region_name ) * sizeof( char ) );
+        memcpy( new->region_name, region_name, strlen( region_name ) * sizeof( char ) );
+        pthread_mutex_lock( &mtx );
+        HASH_ADD( hh, regions, region_handle, sizeof( uint32_t ), new );
+        pthread_mutex_unlock( &mtx );
+    }
+    else
+    {
+        exit( EXIT_FAILURE );
+    }
 }
 
 /**
