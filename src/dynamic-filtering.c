@@ -318,8 +318,54 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
     {
         HASH_FIND( hh, regions, &current->region_handle, sizeof( uint32_t ), to_change );
 
-        to_change->call_cnt += current->call_cnt;
-        to_change->duration += current->duration;
+        // Some regions don't yet exist when the team ends sometimes. Don't know why.
+        if( to_change != NULL )
+        {
+            pthread_mutex_lock( &mtx );
+            // If the region already has been deleted or marked as deletable, skip the next steps.
+#ifdef DYNAMIC_FILTERING_DEBUG
+            if( !to_change->inactive )
+#else
+            if( !to_change->inactive && !to_change->deletable )
+#endif
+            {
+                to_change->call_cnt += current->call_cnt;
+                to_change->duration += current->duration;
+
+                if( filtering_absolute )
+                {
+                    // We're filtering absolute so just compare this region's mean duration with the
+                    // threshold.
+                    if( ( (float) to_change->duration / to_change->call_cnt ) < threshold )
+                    {
+                        to_change->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                        to_change->deletable = true;
+                    }
+                }
+                else
+                {
+                    // We're filtering relative so first update all regions' mean durations and then
+                    // compare the duration of this region with the mean of all regions.
+                    if( to_change->call_cnt == 0 )
+                    {
+                        to_change->mean_duration = 0;
+                    }
+                    else
+                    {
+                        to_change->mean_duration = (float) to_change->duration / to_change->call_cnt;
+                    }
+
+                    update_mean_duration( );
+
+                    if( to_change->mean_duration < mean_duration - threshold )
+                    {
+                        to_change->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                        to_change->deletable = true;
+                    }
+                }
+            }
+            pthread_mutex_unlock( &mtx );
+        }
 
         HASH_DEL( local_info, current );
         free( current );
@@ -417,7 +463,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
             {
                 // We're filtering absolute so just compare this region's mean duration with the
                 // threshold.
-                if( region->duration / region->call_cnt < threshold )
+                if( ( (float) region->duration / region->call_cnt ) < threshold )
                 {
                     region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
                     region->deletable = true;
@@ -427,7 +473,14 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
             {
                 // We're filtering relative so first update all regions' mean durations and then
                 // compare the duration of this region with the mean of all regions.
-                region->mean_duration = region->duration / region->call_cnt;
+                if( region->call_cnt == 0 )
+                {
+                    region->mean_duration = 0;
+                }
+                else
+                {
+                    region->mean_duration = (float) region->duration / region->call_cnt;
+                }
 
                 update_mean_duration( );
 
