@@ -321,14 +321,14 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
         // Some regions don't yet exist when the team ends sometimes. Don't know why.
         if( to_change != NULL )
         {
-            pthread_mutex_lock( &mtx );
             // If the region already has been deleted or marked as deletable, skip the next steps.
 #ifdef DYNAMIC_FILTERING_DEBUG
             if( !to_change->inactive )
 #else
-            if( !to_change->inactive && !to_change->deletable )
+            if( !to_change->deletable && !to_change->inactive )
 #endif
             {
+                pthread_mutex_lock( &mtx );
                 to_change->call_cnt += current->call_cnt;
                 to_change->duration += current->duration;
 
@@ -363,8 +363,8 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
                         to_change->deletable = true;
                     }
                 }
+                pthread_mutex_unlock( &mtx );
             }
-            pthread_mutex_unlock( &mtx );
         }
 
         HASH_DEL( local_info, current );
@@ -405,12 +405,12 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
     if( main_thread )
     {
         region_info* region;
-        pthread_mutex_lock( &mtx );
         HASH_FIND( hh, regions, &region_handle,  sizeof( uint32_t ), region );
 
         // If the current region is already deleted, skip this whole thing.
         if( !region->inactive )
         {
+            pthread_mutex_lock( &mtx );
             region->depth++;
 
             // This region is marked for deletion but not already deleted.
@@ -418,8 +418,8 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
             {
                 region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
             }
+            pthread_mutex_unlock( &mtx );
         }
-        pthread_mutex_unlock( &mtx );
     }
 }
 
@@ -447,17 +447,17 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
         region_info* region;
         HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
 
-        region->call_cnt++;
-        region->duration += ( timestamp - info->last_enter );
         region->depth--;
 
         // If the region already has been deleted or marked as deletable, skip the next steps.
 #ifdef DYNAMIC_FILTERING_DEBUG
         if( !region->inactive )
 #else
-        if( !region->inactive && !region->deletable )
+        if( !region->deletable && !region->inactive )
 #endif
         {
+            region->call_cnt++;
+            region->duration += ( timestamp - info->last_enter );
 
             if( filtering_absolute )
             {
