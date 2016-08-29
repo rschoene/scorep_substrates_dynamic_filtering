@@ -24,6 +24,8 @@ typedef struct region_info
     uint64_t call_cnt;
     /** Global calculated region duration */
     uint64_t duration;
+    /** Timestamp of last enter into this region (used by main thread) */
+    uint64_t last_enter;
     /** Handle for uthash usage */
     UT_hash_handle hh;
     /** Pointer to the callq for the enter instrumentation function */
@@ -407,11 +409,6 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
                              SCOREP_RegionHandle                                    region_handle,
                              __attribute__((unused)) uint64_t*                      metric_values )
 {
-    local_region_info* info = get_local_info( region_handle );
-
-    // Store the last (this) entry for the current thread.
-    info->last_enter = timestamp;
-
     if( main_thread )
     {
         region_info* region;
@@ -421,6 +418,7 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         if( !region->inactive )
         {
             pthread_mutex_lock( &mtx );
+            region->last_enter = timestamp;
             region->depth++;
 
             // This region is marked for deletion but not already deleted.
@@ -430,6 +428,13 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
             }
             pthread_mutex_unlock( &mtx );
         }
+    }
+    else
+    {
+        local_region_info* info = get_local_info( region_handle );
+
+        // Store the last (this) entry for the current thread.
+        info->last_enter = timestamp;
     }
 }
 
@@ -449,8 +454,6 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                             SCOREP_RegionHandle                                     region_handle,
                             __attribute__((unused)) uint64_t*                       metric_values )
 {
-    local_region_info* info = get_local_info( region_handle );
-
     if( main_thread )
     {
         pthread_mutex_lock( &deletion_barrier );
@@ -467,7 +470,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 #endif
         {
             region->call_cnt++;
-            region->duration += ( timestamp - info->last_enter );
+            region->duration += ( timestamp - region->last_enter );
 
             if( filtering_absolute )
             {
@@ -516,6 +519,8 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
     }
     else
     {
+        local_region_info* info = get_local_info( region_handle );
+
         // Region not (yet) ready for deletion so update the metrics.
         info->call_cnt++;
         info->duration += ( timestamp - info->last_enter );
