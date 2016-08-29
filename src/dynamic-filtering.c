@@ -49,14 +49,14 @@ typedef struct region_info
 /**
  * Stores calling information per thread.
  *
- * This is necessary as calculating the duration for one function call would be impossible otherwise
- * in a multithreaded environment.
+ * This is necessary as otherwise all on_exit_region and on_enter_region calls need to be
+ * serialized.
  */
 typedef struct local_region_info
 {
-    /** Global counter for region entries */
+    /** Local counter for region entries */
     uint64_t call_cnt;
-    /** Global calculated region duration */
+    /** Local calculated region duration */
     uint64_t duration;
     /** Timestamp of last enter into this region */
     uint64_t last_enter;
