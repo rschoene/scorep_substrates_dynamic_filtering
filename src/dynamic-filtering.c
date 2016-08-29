@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <scorep_substrates_definition.h>
@@ -69,9 +70,6 @@ region_info* regions = NULL;
 /** Thread local region info */
 __thread local_region_info* local_info = NULL;
 
-/** Read/write lock for accessing the global region info */
-pthread_rwlock_t rwlock;
-
 /** General mutex used as a guard for writing region info */
 pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 
@@ -94,7 +92,7 @@ unsigned long long threshold = 0;
 float mean_duration = 0;
 
 /** Flag indicating that this current thread is the main thread */
-__thread bool main_thread = true;
+__thread bool main_thread = false;
 
 /**
  * Update the mean duration of all regions.
@@ -288,7 +286,6 @@ static void on_team_begin( __attribute__((unused)) struct SCOREP_Location*      
 {
     pthread_mutex_lock( &deletion_barrier );
     thread_ctr++;
-    main_thread = false;
     pthread_mutex_unlock( &deletion_barrier );
 }
 
@@ -318,52 +315,65 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
     {
         HASH_FIND( hh, regions, &current->region_handle, sizeof( uint32_t ), to_change );
 
-        // Some regions don't yet exist when the team ends sometimes. Don't know why.
-        if( to_change != NULL )
+        // The main thread does all this in on_exit_region so no need to do it here as well.
+        if( !main_thread )
         {
-            // If the region already has been deleted or marked as deletable, skip the next steps.
-#ifdef DYNAMIC_FILTERING_DEBUG
-            if( !to_change->inactive )
-#else
-            if( !to_change->deletable && !to_change->inactive )
-#endif
+            // Some regions don't yet exist when the team ends sometimes. Don't know why.
+            if( to_change != NULL )
             {
-                pthread_mutex_lock( &mtx );
-                to_change->call_cnt += current->call_cnt;
-                to_change->duration += current->duration;
+                // If the region already has been deleted or marked as deletable, skip the next steps.
+#ifdef DYNAMIC_FILTERING_DEBUG
+                if( !to_change->inactive )
+#else
+                if( !to_change->deletable && !to_change->inactive )
+#endif
+                {
+                    pthread_mutex_lock( &mtx );
+                    to_change->call_cnt += current->call_cnt;
+                    to_change->duration += current->duration;
 
-                if( filtering_absolute )
-                {
-                    // We're filtering absolute so just compare this region's mean duration with the
-                    // threshold.
-                    if( ( (float) to_change->duration / to_change->call_cnt ) < threshold )
+                    if( filtering_absolute )
                     {
-                        to_change->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
-                        to_change->deletable = true;
-                    }
-                }
-                else
-                {
-                    // We're filtering relative so first update all regions' mean durations and then
-                    // compare the duration of this region with the mean of all regions.
-                    if( to_change->call_cnt == 0 )
-                    {
-                        to_change->mean_duration = 0;
+                        // We're filtering absolute so just compare this region's mean duration with
+                        // the threshold.
+                        if( ( (float) to_change->duration / to_change->call_cnt ) < threshold )
+                        {
+                            if( !to_change->exit_func )
+                            {
+                                to_change->exit_func =
+                                                get_function_call_ip( "__cyg_profile_func_exit" );
+                            }
+                            to_change->deletable = true;
+                        }
                     }
                     else
                     {
-                        to_change->mean_duration = (float) to_change->duration / to_change->call_cnt;
-                    }
+                        // We're filtering relative so first update all regions' mean durations and
+                        // then compare the duration of this region with the mean of all regions.
+                        if( to_change->call_cnt == 0 )
+                        {
+                            to_change->mean_duration = 0;
+                        }
+                        else
+                        {
+                            to_change->mean_duration = (float) to_change->duration /
+                                                                    to_change->call_cnt;
+                        }
 
-                    update_mean_duration( );
+                        update_mean_duration( );
 
-                    if( to_change->mean_duration < mean_duration - threshold )
-                    {
-                        to_change->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
-                        to_change->deletable = true;
+                        if( to_change->mean_duration < mean_duration - threshold )
+                        {
+                            if( !to_change->exit_func )
+                            {
+                                to_change->exit_func =
+                                                get_function_call_ip( "__cyg_profile_func_exit" );
+                            }
+                            to_change->deletable = true;
+                        }
                     }
+                    pthread_mutex_unlock( &mtx );
                 }
-                pthread_mutex_unlock( &mtx );
             }
         }
 
@@ -465,7 +475,10 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                 // threshold.
                 if( ( (float) region->duration / region->call_cnt ) < threshold )
                 {
-                    region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                    if( !region->exit_func )
+                    {
+                        region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                    }
                     region->deletable = true;
                 }
             }
@@ -486,7 +499,10 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 
                 if( region->mean_duration < mean_duration - threshold )
                 {
-                    region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                    if( !region->exit_func )
+                    {
+                        region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                    }
                     region->deletable = true;
                 }
             }
@@ -550,14 +566,10 @@ static void on_define_region( const char*                                       
  */
 static void on_init( )
 {
-    // Initialize the read/write lock
-    if( pthread_rwlock_init( &rwlock, NULL ) != 0 )
-    {
-        fprintf( stderr, "Unable to create read/write lock.\n" );
-        exit( EXIT_FAILURE );
-    }
+    // Mark this thread as the main thread.
+    main_thread = true;
 
-    // Get the threshold for filtering
+    // Get the threshold for filtering.
     char* env_str = getenv( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD" );
     if( env_str == NULL )
     {
@@ -573,7 +585,7 @@ static void on_init( )
         exit( EXIT_FAILURE );
     }
 
-    // Get the wanted filtering method
+    // Get the wanted filtering method.
     env_str = getenv( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_METHOD" );
     if( env_str == NULL )
     {
