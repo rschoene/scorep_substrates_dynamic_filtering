@@ -225,16 +225,18 @@ static void delete_regions( )
         // Only delete the function calls if the region is marked as deletable, the address of the
         // entry function call is correctly set and the address of the exit function call is
         // correctly set.
-        if( current->deletable
-            && !current->inactive
+        if( !current->inactive
+            && current->deletable
             && current->depth == 0
             && !( current->enter_func == 0 || current->exit_func == 0 ) )
         {
             override_callq( current->enter_func );
             override_callq( current->exit_func );
             current->inactive = true;
+#ifdef DYNAMIC_FILTERING_DEBUG
             fprintf( stderr, "Deleted instrumentation calls for region %s!\n",
                                                                         current->region_name );
+#endif
         }
     }
 }
