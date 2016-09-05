@@ -142,11 +142,8 @@ static void override_callq( char*                                               
     }
 
     // Finally write that NOP.
-    memset( ptr,     0x0f, 1 );
-    memset( ptr + 1, 0x1f, 1 );
-    memset( ptr + 2, 0x44, 1 );
-    memset( ptr + 3, 0x00, 1 );
-    memset( ptr + 4, 0x00, 1 );
+    const char nop[] = { 0x0f, 0x1f, 0x44, 0x00, 0x00 };
+    memcpy( ptr, nop, sizeof( char ) * 5 );
 
     // Remove the write permission.
     if( mprotect( first_ptr, page_size, PROT_READ | PROT_EXEC ) != 0
