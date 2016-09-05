@@ -47,6 +47,17 @@ typedef struct region_info
 } region_info;
 
 /**
+ * Stores a short version of the region info.
+ */
+typedef struct short_region_info
+{
+    /** Handle for uthash usage */
+    UT_hash_handle hh;
+    /** Handle identifying the region */
+    uint32_t region_handle;
+} short_region_info;
+
+/**
  * Stores calling information per thread.
  *
  * This is necessary as otherwise all on_exit_region and on_enter_region calls need to be
@@ -68,6 +79,9 @@ typedef struct local_region_info
 
 /** Global list of defined regions */
 region_info* regions = NULL;
+
+/** Global list of undeletable regions */
+short_region_info* undeletable_regions = NULL;
 
 /** Thread local region info */
 __thread local_region_info* local_info = NULL;
@@ -408,10 +422,20 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
                              SCOREP_RegionHandle                                    region_handle,
                              __attribute__((unused)) uint64_t*                      metric_values )
 {
+    // Skip the undeletable functions!
+    short_region_info* tester;
+    HASH_FIND( hh, undeletable_regions, &region_handle, sizeof( uint32_t ), tester );
+
+    if( tester != NULL )
+    {
+        return;
+    }
+
+    // The function could be overwritten. Process it further.
     if( main_thread )
     {
         region_info* region;
-        HASH_FIND( hh, regions, &region_handle,  sizeof( uint32_t ), region );
+        HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
 
         // If the current region is already deleted, skip this whole thing.
         if( !region->inactive )
@@ -453,6 +477,16 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                             SCOREP_RegionHandle                                     region_handle,
                             __attribute__((unused)) uint64_t*                       metric_values )
 {
+    // Skip the undeletable functions!
+    short_region_info* tester;
+    HASH_FIND( hh, undeletable_regions, &region_handle, sizeof( uint32_t ), tester );
+
+    if( tester != NULL )
+    {
+        return;
+    }
+
+    // This function could be overwritten. Process it further.
     if( main_thread )
     {
         pthread_mutex_lock( &deletion_barrier );
@@ -555,6 +589,20 @@ static void on_define_region( const char*                                       
         memcpy( new->region_name, region_name, strlen( region_name ) * sizeof( char ) );
         pthread_mutex_lock( &mtx );
         HASH_ADD( hh, regions, region_handle, sizeof( uint32_t ), new );
+
+        // The MPI and OpenMP functions are not compiler instrumented and have no __cyg functions.
+        // So we can't delete them, so we need to skip them. In order to do that, we have to save
+        // those seperatly, because a lookup in the "big" region info map is quite expensive.
+        //
+        // Probably needs to be extended to work with C and C++.
+        if( strncmp( "!$omp", region_name, strlen( "!$omp" ) ) == 0
+            || strncmp( "MPI_", region_name, strlen( "MPI_" ) ) == 0 )
+        {
+            short_region_info* new_undeletable = calloc( 1, sizeof( short_region_info ) );
+            new_undeletable->region_handle = region_handle;
+            HASH_ADD( hh, undeletable_regions, region_handle, sizeof( uint32_t ), new_undeletable );
+        }
+
         pthread_mutex_unlock( &mtx );
     }
     else
