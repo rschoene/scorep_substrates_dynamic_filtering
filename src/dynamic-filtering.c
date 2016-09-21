@@ -11,7 +11,10 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-#include <scorep_substrates_definition.h>
+#include <SCOREP_SubstratePlugins.h>
+#include <SCOREP_SubstrateEvents.h>
+#include <SCOREP_PublicHandles.h>
+#include <SCOREP_PublicTypes.h>
 
 #include "uthash.h"
 
@@ -616,7 +619,7 @@ static void on_define_region( const char*                                       
  *
  * Just sets some default values and reads some environment variables.
  */
-static void on_init( )
+static void init( void )
 {
     // Mark this thread as the main thread.
     main_thread = true;
@@ -660,7 +663,7 @@ static void on_init( )
  *
  * Mainly used for cleanup.
  */
-static void on_finalize( )
+static void finalize( void )
 {
 #ifdef DYNAMIC_FILTERING_DEBUG
     fprintf( stderr, "\n\nFinalizing.\n\n\n" );
@@ -692,39 +695,26 @@ static void on_finalize( )
     regions = NULL;
 }
 
-SCOREP_Substrates_Callback** SCOREP_SubstratePlugin_dynamic_filtering_plugin_get_event_callbacks( )
+static uint32_t event_functions( SCOREP_Substrates_Mode                             mode,
+                                 SCOREP_Substrates_Callback**                       functions )
 {
-    int i;
-    SCOREP_Substrates_Callback** retval = malloc( SCOREP_SUBSTRATES_NUM_MODES *
-                                                  sizeof( SCOREP_Substrates_Callback* ) );
+    SCOREP_Substrates_Callback* ret = calloc( SCOREP_SUBSTRATES_NUM_EVENTS,
+                                                    sizeof( SCOREP_Substrates_Callback ) );
 
-    for( i = 0; i < SCOREP_SUBSTRATES_NUM_MODES; i++ )
-    {
-        retval[i] = calloc( SCOREP_SUBSTRATES_NUM_EVENTS, sizeof( SCOREP_Substrates_Callback ) );
-    }
+    ret[SCOREP_EVENT_ENTER_REGION] = (SCOREP_Substrates_Callback) on_enter_region;
+    ret[SCOREP_EVENT_EXIT_REGION]  = (SCOREP_Substrates_Callback) on_exit_region;
 
-    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_ENTER_REGION] =
-                                                        (SCOREP_Substrates_Callback) on_enter_region;
-    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_EXIT_REGION] =
-                                                        (SCOREP_Substrates_Callback) on_exit_region;
-    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_BEGIN] =
-                                                        (SCOREP_Substrates_Callback) on_team_begin;
-    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_END] =
-                                                        (SCOREP_Substrates_Callback) on_team_end;
-    return retval;
+    *functions = ret;
+    return SCOREP_SUBSTRATES_NUM_EVENTS;
 }
 
-SCOREP_Substrates_Callback* SCOREP_SubstratePlugin_dynamic_filtering_plugin_get_mgmt_callbacks( )
+SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering_plugin )
 {
-  SCOREP_Substrates_Callback* retval = malloc( SCOREP_SUBSTRATES_NUM_MGMT_EVENTS *
-                                               sizeof( SCOREP_Substrates_Callback ) );
-  retval[SCOREP_EVENT_FINALIZE_SUBSTRATE] = (SCOREP_Substrates_Callback) on_finalize;
-  retval[SCOREP_EVENT_DEFINE_REGION] = (SCOREP_Substrates_Callback) on_define_region;
-  return retval;
-}
+    SCOREP_Substrate_Plugin_Info info = { 0 };
 
-int SCOREP_SubstratePlugin_dynamic_filtering_plugin_init( )
-{
-  on_init( );
-  return 0;
+    info.early_init     = init;
+    info.finalize       = finalize;
+    info.define_handle  = on_define_region;
+
+    info.plugin_version = SCOREP_SUBSTRATE_PLUGIN_VERSION;
 }
