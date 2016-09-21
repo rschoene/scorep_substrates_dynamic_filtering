@@ -113,6 +113,9 @@ float mean_duration = 0;
 /** Flag indicating that this current thread is the main thread */
 __thread bool main_thread = false;
 
+/** Internal substrates id */
+size_t id;
+
 /**
  * Update the mean duration of all regions.
  *
@@ -568,28 +571,21 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
  *
  * Creates a new region_info struct in the global regions table for the newly defined region.
  *
- * @param   region_name                     Human readable region name. Used for output on deletion.
- * @param   region_canonical_name           unused
- * @param   paradigm_type                   unused
- * @param   region_type                     unused
- * @param   region_handle                   Numeric identifier for this region. Used for internal
- *                                          identification.
+ * @param   handle                          Generic handle type identifying the region.
+ * @param   type                            Type specifier for the handle.
  */
-static void on_define_region( const char*                                           region_name,
-                              __attribute__((unused)) const char*                   region_canonical_name,
-                              __attribute__((unused)) SCOREP_ParadigmType           paradigm_type,
-                              __attribute__((unused)) SCOREP_RegionType             region_type,
-                              SCOREP_RegionHandle                                   region_handle )
+static void on_define_region( SCOREP_AnyHandle                                      handle,
+                              __attribute__((unused)) SCOREP_HandleType             type )
 {
     region_info* new;
 
-    HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), new );
+    HASH_FIND( hh, regions, &handle, sizeof( uint32_t ), new );
     if( new == NULL )
     {
         new = calloc( 1, sizeof( region_info ) );
-        new->region_handle = region_handle;
-        new->region_name = calloc( 1, strlen( region_name ) * sizeof( char ) );
-        memcpy( new->region_name, region_name, strlen( region_name ) * sizeof( char ) );
+        new->region_handle = handle;
+        //new->region_name = calloc( 1, strlen( region_name ) * sizeof( char ) );
+        //memcpy( new->region_name, region_name, strlen( region_name ) * sizeof( char ) );
         pthread_mutex_lock( &mtx );
         HASH_ADD( hh, regions, region_handle, sizeof( uint32_t ), new );
 
@@ -598,13 +594,13 @@ static void on_define_region( const char*                                       
         // those seperatly, because a lookup in the "big" region info map is quite expensive.
         //
         // Probably needs to be extended to work with C and C++.
-        if( strncmp( "!$omp", region_name, strlen( "!$omp" ) ) == 0
-            || strncmp( "MPI_", region_name, strlen( "MPI_" ) ) == 0 )
-        {
-            short_region_info* new_undeletable = calloc( 1, sizeof( short_region_info ) );
-            new_undeletable->region_handle = region_handle;
-            HASH_ADD( hh, undeletable_regions, region_handle, sizeof( uint32_t ), new_undeletable );
-        }
+        //if( strncmp( "!$omp", region_name, strlen( "!$omp" ) ) == 0
+        //    || strncmp( "MPI_", region_name, strlen( "MPI_" ) ) == 0 )
+        //{
+        //    short_region_info* new_undeletable = calloc( 1, sizeof( short_region_info ) );
+        //    new_undeletable->region_handle = region_handle;
+        //    HASH_ADD( hh, undeletable_regions, region_handle, sizeof( uint32_t ), new_undeletable );
+        //}
 
         pthread_mutex_unlock( &mtx );
     }
@@ -619,7 +615,7 @@ static void on_define_region( const char*                                       
  *
  * Just sets some default values and reads some environment variables.
  */
-static void init( void )
+static int init( void )
 {
     // Mark this thread as the main thread.
     main_thread = true;
@@ -656,6 +652,13 @@ static void init( void )
     {
         filtering_absolute = false;
     }
+
+    return 0;
+}
+
+static void assign( size_t                                                          s_id )
+{
+    id = s_id;
 }
 
 /**
@@ -663,7 +666,7 @@ static void init( void )
  *
  * Mainly used for cleanup.
  */
-static void finalize( void )
+static size_t finalize( void )
 {
 #ifdef DYNAMIC_FILTERING_DEBUG
     fprintf( stderr, "\n\nFinalizing.\n\n\n" );
@@ -693,9 +696,11 @@ static void finalize( void )
     }
 
     regions = NULL;
+
+    return id;
 }
 
-static uint32_t event_functions( SCOREP_Substrates_Mode                             mode,
+static uint32_t event_functions( __attribute__((unused)) SCOREP_Substrates_Mode     mode,
                                  SCOREP_Substrates_Callback**                       functions )
 {
     SCOREP_Substrates_Callback* ret = calloc( SCOREP_SUBSTRATES_NUM_EVENTS,
@@ -703,6 +708,8 @@ static uint32_t event_functions( SCOREP_Substrates_Mode                         
 
     ret[SCOREP_EVENT_ENTER_REGION] = (SCOREP_Substrates_Callback) on_enter_region;
     ret[SCOREP_EVENT_EXIT_REGION]  = (SCOREP_Substrates_Callback) on_exit_region;
+    ret[SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_BEGIN]  = (SCOREP_Substrates_Callback) on_team_begin;
+    ret[SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_END]    = (SCOREP_Substrates_Callback) on_team_end;
 
     *functions = ret;
     return SCOREP_SUBSTRATES_NUM_EVENTS;
@@ -712,9 +719,13 @@ SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering_plugin )
 {
     SCOREP_Substrate_Plugin_Info info = { 0 };
 
-    info.early_init     = init;
-    info.finalize       = finalize;
-    info.define_handle  = on_define_region;
+    info.early_init             = init;
+    info.assign_id              = assign;
+    info.finalize               = finalize;
+    info.define_handle          = on_define_region;
+    info.get_event_functions    = event_functions;
 
-    info.plugin_version = SCOREP_SUBSTRATE_PLUGIN_VERSION;
+    info.plugin_version         = SCOREP_SUBSTRATE_PLUGIN_VERSION;
+
+    return info;
 }
