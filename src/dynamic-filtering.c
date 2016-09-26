@@ -11,7 +11,10 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-#include <scorep_substrates_definition.h>
+#include <SCOREP_SubstratePlugins.h>
+#include <SCOREP_SubstrateEvents.h>
+#include <SCOREP_PublicHandles.h>
+#include <SCOREP_PublicTypes.h>
 
 #include "uthash.h"
 
@@ -47,17 +50,6 @@ typedef struct region_info
 } region_info;
 
 /**
- * Stores a short version of the region info.
- */
-typedef struct short_region_info
-{
-    /** Handle for uthash usage */
-    UT_hash_handle hh;
-    /** Handle identifying the region */
-    uint32_t region_handle;
-} short_region_info;
-
-/**
  * Stores calling information per thread.
  *
  * This is necessary as otherwise all on_exit_region and on_enter_region calls need to be
@@ -79,9 +71,6 @@ typedef struct local_region_info
 
 /** Global list of defined regions */
 region_info* regions = NULL;
-
-/** Global list of undeletable regions */
-short_region_info* undeletable_regions = NULL;
 
 /** Thread local region info */
 __thread local_region_info* local_info = NULL;
@@ -109,6 +98,13 @@ float mean_duration = 0;
 
 /** Flag indicating that this current thread is the main thread */
 __thread bool main_thread = false;
+
+/** Internal substrates id */
+size_t id;
+
+/** Internal substrates callbacks for information retrieval about handles */
+const char* (*get_region_name)( SCOREP_RegionHandle handle );
+SCOREP_ParadigmType (*get_paradigm_type)( SCOREP_RegionHandle handle );
 
 /**
  * Update the mean duration of all regions.
@@ -423,10 +419,7 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
                              __attribute__((unused)) uint64_t*                      metric_values )
 {
     // Skip the undeletable functions!
-    short_region_info* tester;
-    HASH_FIND( hh, undeletable_regions, &region_handle, sizeof( uint32_t ), tester );
-
-    if( tester != NULL )
+    if( (*get_paradigm_type)( region_handle ) != SCOREP_PARADIGM_COMPILER )
     {
         return;
     }
@@ -478,10 +471,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                             __attribute__((unused)) uint64_t*                       metric_values )
 {
     // Skip the undeletable functions!
-    short_region_info* tester;
-    HASH_FIND( hh, undeletable_regions, &region_handle, sizeof( uint32_t ), tester );
-
-    if( tester != NULL )
+    if( (*get_paradigm_type)( region_handle ) != SCOREP_PARADIGM_COMPILER )
     {
         return;
     }
@@ -565,44 +555,32 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
  *
  * Creates a new region_info struct in the global regions table for the newly defined region.
  *
- * @param   region_name                     Human readable region name. Used for output on deletion.
- * @param   region_canonical_name           unused
- * @param   paradigm_type                   unused
- * @param   region_type                     unused
- * @param   region_handle                   Numeric identifier for this region. Used for internal
- *                                          identification.
+ * @param   handle                          Generic handle type identifying the region.
+ * @param   type                            Type specifier for the handle.
  */
-static void on_define_region( const char*                                           region_name,
-                              __attribute__((unused)) const char*                   region_canonical_name,
-                              __attribute__((unused)) SCOREP_ParadigmType           paradigm_type,
-                              __attribute__((unused)) SCOREP_RegionType             region_type,
-                              SCOREP_RegionHandle                                   region_handle )
+static void on_define_region( SCOREP_AnyHandle                                      handle,
+                              SCOREP_HandleType                                     type )
 {
+    if( type != SCOREP_HANDLE_TYPE_REGION
+        || (*get_paradigm_type)( handle ) != SCOREP_PARADIGM_COMPILER )
+    {
+        return;
+    }
+
     region_info* new;
 
-    HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), new );
+    HASH_FIND( hh, regions, &handle, sizeof( uint32_t ), new );
     if( new == NULL )
     {
+        const char* region_name = (*get_region_name)( handle );
+
         new = calloc( 1, sizeof( region_info ) );
-        new->region_handle = region_handle;
+        new->region_handle = handle;
         new->region_name = calloc( 1, strlen( region_name ) * sizeof( char ) );
         memcpy( new->region_name, region_name, strlen( region_name ) * sizeof( char ) );
+
         pthread_mutex_lock( &mtx );
         HASH_ADD( hh, regions, region_handle, sizeof( uint32_t ), new );
-
-        // The MPI and OpenMP functions are not compiler instrumented and have no __cyg functions.
-        // So we can't delete them, so we need to skip them. In order to do that, we have to save
-        // those seperatly, because a lookup in the "big" region info map is quite expensive.
-        //
-        // Probably needs to be extended to work with C and C++.
-        if( strncmp( "!$omp", region_name, strlen( "!$omp" ) ) == 0
-            || strncmp( "MPI_", region_name, strlen( "MPI_" ) ) == 0 )
-        {
-            short_region_info* new_undeletable = calloc( 1, sizeof( short_region_info ) );
-            new_undeletable->region_handle = region_handle;
-            HASH_ADD( hh, undeletable_regions, region_handle, sizeof( uint32_t ), new_undeletable );
-        }
-
         pthread_mutex_unlock( &mtx );
     }
     else
@@ -616,7 +594,7 @@ static void on_define_region( const char*                                       
  *
  * Just sets some default values and reads some environment variables.
  */
-static void on_init( )
+static int init( void )
 {
     // Mark this thread as the main thread.
     main_thread = true;
@@ -653,6 +631,20 @@ static void on_init( )
     {
         filtering_absolute = false;
     }
+
+    return 0;
+}
+
+/**
+ * Gets the internal Score-P id for this plugin.
+ *
+ * The id is needed in order to give a proper return value in the finalizing method.
+ *
+ * @param   s_id                            Score-Ps internal id for this plugin.
+ */
+static void assign( size_t                                                          s_id )
+{
+    id = s_id;
 }
 
 /**
@@ -660,7 +652,7 @@ static void on_init( )
  *
  * Mainly used for cleanup.
  */
-static void on_finalize( )
+static size_t finalize( void )
 {
 #ifdef DYNAMIC_FILTERING_DEBUG
     fprintf( stderr, "\n\nFinalizing.\n\n\n" );
@@ -690,41 +682,66 @@ static void on_finalize( )
     }
 
     regions = NULL;
+
+    return id;
 }
 
-SCOREP_Substrates_Callback** SCOREP_SubstratePlugin_dynamic_filtering_plugin_get_event_callbacks( )
+/**
+ * Defines callbacks for events.
+ *
+ * Defines callbacks for all events that are handled by this plugin.
+ *
+ * @param   mode                            unused
+ * @param   functions                       Struct containing all available events.
+ */
+static uint32_t event_functions( __attribute__((unused)) SCOREP_Substrates_Mode     mode,
+                                 SCOREP_Substrates_Callback**                       functions )
 {
-    int i;
-    SCOREP_Substrates_Callback** retval = malloc( SCOREP_SUBSTRATES_NUM_MODES *
-                                                  sizeof( SCOREP_Substrates_Callback* ) );
+    SCOREP_Substrates_Callback* ret = calloc( SCOREP_SUBSTRATES_NUM_EVENTS,
+                                                    sizeof( SCOREP_Substrates_Callback ) );
 
-    for( i = 0; i < SCOREP_SUBSTRATES_NUM_MODES; i++ )
-    {
-        retval[i] = calloc( SCOREP_SUBSTRATES_NUM_EVENTS, sizeof( SCOREP_Substrates_Callback ) );
-    }
+    ret[SCOREP_EVENT_ENTER_REGION] = (SCOREP_Substrates_Callback) on_enter_region;
+    ret[SCOREP_EVENT_EXIT_REGION]  = (SCOREP_Substrates_Callback) on_exit_region;
+    ret[SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_BEGIN]  = (SCOREP_Substrates_Callback) on_team_begin;
+    ret[SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_END]    = (SCOREP_Substrates_Callback) on_team_end;
 
-    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_ENTER_REGION] =
-                                                        (SCOREP_Substrates_Callback) on_enter_region;
-    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_EXIT_REGION] =
-                                                        (SCOREP_Substrates_Callback) on_exit_region;
-    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_BEGIN] =
-                                                        (SCOREP_Substrates_Callback) on_team_begin;
-    retval[SCOREP_SUBSTRATES_RECORDING_ENABLED][SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_END] =
-                                                        (SCOREP_Substrates_Callback) on_team_end;
-    return retval;
+    *functions = ret;
+    return SCOREP_SUBSTRATES_NUM_EVENTS;
 }
 
-SCOREP_Substrates_Callback* SCOREP_SubstratePlugin_dynamic_filtering_plugin_get_mgmt_callbacks( )
+/**
+ * Gets the callbacks for information retrieval about handles.
+ *
+ * Just stores all callbacks provided by the substrates API in the struct 'cb' for later use.
+ *
+ * @param   callbacks                       The callbacks to be stored.
+ * @param   size                            The size of the struct containing the callbacks.
+ *                                          (unused)
+ */
+void set_callbacks( SCOREP_SubstrateCallbacks                                       callbacks,
+                    __attribute__((unused)) size_t                                  size )
 {
-  SCOREP_Substrates_Callback* retval = malloc( SCOREP_SUBSTRATES_NUM_MGMT_EVENTS *
-                                               sizeof( SCOREP_Substrates_Callback ) );
-  retval[SCOREP_EVENT_FINALIZE_SUBSTRATE] = (SCOREP_Substrates_Callback) on_finalize;
-  retval[SCOREP_EVENT_DEFINE_REGION] = (SCOREP_Substrates_Callback) on_define_region;
-  return retval;
+    get_region_name = callbacks.SCOREP_RegionHandle_GetName;
+    get_paradigm_type = callbacks.SCOREP_RegionHandle_GetParadigmType;
 }
 
-int SCOREP_SubstratePlugin_dynamic_filtering_plugin_init( )
+/**
+ * Registers the plugin in Score-Ps interface.
+ *
+ * Sets management callbacks as well as the standard plugin version.
+ */
+SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering_plugin )
 {
-  on_init( );
-  return 0;
+    SCOREP_Substrate_Plugin_Info info = { 0 };
+
+    info.early_init             = init;
+    info.assign_id              = assign;
+    info.finalize               = finalize;
+    info.define_handle          = on_define_region;
+    info.get_event_functions    = event_functions;
+    info.set_callbacks          = set_callbacks;
+
+    info.plugin_version         = SCOREP_SUBSTRATE_PLUGIN_VERSION;
+
+    return info;
 }
