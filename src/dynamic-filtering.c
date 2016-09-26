@@ -116,6 +116,9 @@ __thread bool main_thread = false;
 /** Internal substrates id */
 size_t id;
 
+/** Internal substrates callbacks for information retrieval about handles */
+const char* (*get_region_name)( SCOREP_RegionHandle handle );
+
 /**
  * Update the mean duration of all regions.
  *
@@ -575,17 +578,24 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
  * @param   type                            Type specifier for the handle.
  */
 static void on_define_region( SCOREP_AnyHandle                                      handle,
-                              __attribute__((unused)) SCOREP_HandleType             type )
+                              SCOREP_HandleType                                     type )
 {
+    if( type != SCOREP_HANDLE_TYPE_REGION )
+    {
+        return;
+    }
+
     region_info* new;
 
     HASH_FIND( hh, regions, &handle, sizeof( uint32_t ), new );
     if( new == NULL )
     {
+        const char* region_name = (*get_region_name)( handle );
+
         new = calloc( 1, sizeof( region_info ) );
         new->region_handle = handle;
-        //new->region_name = calloc( 1, strlen( region_name ) * sizeof( char ) );
-        //memcpy( new->region_name, region_name, strlen( region_name ) * sizeof( char ) );
+        new->region_name = calloc( 1, strlen( region_name ) * sizeof( char ) );
+        memcpy( new->region_name, region_name, strlen( region_name ) * sizeof( char ) );
         pthread_mutex_lock( &mtx );
         HASH_ADD( hh, regions, region_handle, sizeof( uint32_t ), new );
 
@@ -594,13 +604,13 @@ static void on_define_region( SCOREP_AnyHandle                                  
         // those seperatly, because a lookup in the "big" region info map is quite expensive.
         //
         // Probably needs to be extended to work with C and C++.
-        //if( strncmp( "!$omp", region_name, strlen( "!$omp" ) ) == 0
-        //    || strncmp( "MPI_", region_name, strlen( "MPI_" ) ) == 0 )
-        //{
-        //    short_region_info* new_undeletable = calloc( 1, sizeof( short_region_info ) );
-        //    new_undeletable->region_handle = region_handle;
-        //    HASH_ADD( hh, undeletable_regions, region_handle, sizeof( uint32_t ), new_undeletable );
-        //}
+        if( strncmp( "!$omp", region_name, strlen( "!$omp" ) ) == 0
+            || strncmp( "MPI_", region_name, strlen( "MPI_" ) ) == 0 )
+        {
+            short_region_info* new_undeletable = calloc( 1, sizeof( short_region_info ) );
+            new_undeletable->region_handle = handle;
+            HASH_ADD( hh, undeletable_regions, region_handle, sizeof( uint32_t ), new_undeletable );
+        }
 
         pthread_mutex_unlock( &mtx );
     }
@@ -700,6 +710,14 @@ static size_t finalize( void )
     return id;
 }
 
+/**
+ * Defines callbacks for events.
+ *
+ * Defines callbacks for all events that are handled by this plugin.
+ *
+ * @param   mode                            unused
+ * @param   functions                       Struct containing all available events.
+ */
 static uint32_t event_functions( __attribute__((unused)) SCOREP_Substrates_Mode     mode,
                                  SCOREP_Substrates_Callback**                       functions )
 {
@@ -715,6 +733,24 @@ static uint32_t event_functions( __attribute__((unused)) SCOREP_Substrates_Mode 
     return SCOREP_SUBSTRATES_NUM_EVENTS;
 }
 
+/**
+ * Gets the callbacks for information retrieval about handles.
+ *
+ * Just stores all callbacks provided by the substrates API in the struct 'cb' for later use.
+ *
+ * @param   callbacks                       The callbacks to be stored.
+ * @param   size                            The size of the struct containing the callbacks.
+ *                                          (unused)
+ */
+void set_callbacks( SCOREP_SubstrateCallbacks                                       callbacks,
+                    __attribute__((unused)) size_t                                  size )
+{
+    get_region_name = callbacks.SCOREP_RegionHandle_GetName;
+}
+
+/**
+ *
+ */
 SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering_plugin )
 {
     SCOREP_Substrate_Plugin_Info info = { 0 };
@@ -724,6 +760,7 @@ SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering_plugin )
     info.finalize               = finalize;
     info.define_handle          = on_define_region;
     info.get_event_functions    = event_functions;
+    info.set_callbacks          = set_callbacks;
 
     info.plugin_version         = SCOREP_SUBSTRATE_PLUGIN_VERSION;
 
