@@ -106,6 +106,12 @@ size_t id;
 const char* (*get_region_name)( SCOREP_RegionHandle handle );
 SCOREP_ParadigmType (*get_paradigm_type)( SCOREP_RegionHandle handle );
 
+/** Name of the enter region instrumentation call */
+char* enter_func = NULL;
+
+/** Name of the exit region instrumentation call */
+char* exit_func = NULL;
+
 /**
  * Update the mean duration of all regions.
  *
@@ -161,6 +167,45 @@ static void override_callq( char*                                               
     {
         fprintf( stderr,  "Could not remove write permission to memory access rights on position "
                           "%p", ptr );
+    }
+}
+
+/**
+ * Checks which instrumentation call is used in the binary.
+ *
+ * Walks down the call path and searches for all known instrumentation functions (enter functions,
+ * as this one should be called within a enter instrumentation call). The type found is stored for
+ * later use in get_function_call_ip.
+ */
+static void get_instrumentation_call_type( )
+{
+    unw_cursor_t cursor;
+    unw_context_t uc;
+    unw_word_t offset;
+    char sym[256];
+
+    unw_getcontext( &uc );
+    unw_init_local( &cursor, &uc );
+
+    // Step up the call path...
+    while( unw_step( &cursor ) > 0 )
+    {
+        // ... and check the function name against all know instrumentation call names.
+        unw_get_proc_name( &cursor, sym, sizeof( sym ), &offset );
+
+        if( strncmp( sym, "__cyg_profile_func_enter", 24 ) == 0 )
+        {
+            enter_func = "__cyg_profile_func_enter";
+            exit_func = "__cyg_profile_func_exit";
+            return;
+        }
+        else if( strncmp( sym, "scorep_plugin_enter_region", 26 ) == 0 )
+        {
+            enter_func = "scorep_plugin_enter_region";
+            exit_func = "scorep_plugin_exit_region";
+            return;
+        }
+        // TODO: else if Intel compiler
     }
 }
 
@@ -352,7 +397,7 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
                             if( !to_change->exit_func )
                             {
                                 to_change->exit_func =
-                                                get_function_call_ip( "__cyg_profile_func_exit" );
+                                                get_function_call_ip( exit_func );
                             }
                             to_change->deletable = true;
                         }
@@ -378,7 +423,7 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
                             if( !to_change->exit_func )
                             {
                                 to_change->exit_func =
-                                                get_function_call_ip( "__cyg_profile_func_exit" );
+                                                get_function_call_ip( exit_func );
                             }
                             to_change->deletable = true;
                         }
@@ -424,6 +469,12 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         return;
     }
 
+    // Once per runtime determine which instrumentation calls are used in this binary.
+    if( !enter_func || !exit_func )
+    {
+        get_instrumentation_call_type( );
+    }
+
     // The function could be overwritten. Process it further.
     if( main_thread )
     {
@@ -440,7 +491,7 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
             // This region is marked for deletion but not already deleted.
             if( !region->enter_func )
             {
-                region->enter_func = get_function_call_ip( "__cyg_profile_func_enter" );
+                region->enter_func = get_function_call_ip( enter_func );
             }
             pthread_mutex_unlock( &mtx );
         }
@@ -503,7 +554,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                 {
                     if( !region->exit_func )
                     {
-                        region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                        region->exit_func = get_function_call_ip( exit_func );
                     }
                     region->deletable = true;
                 }
@@ -527,7 +578,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                 {
                     if( !region->exit_func )
                     {
-                        region->exit_func = get_function_call_ip( "__cyg_profile_func_exit" );
+                        region->exit_func = get_function_call_ip( exit_func );
                     }
                     region->deletable = true;
                 }
