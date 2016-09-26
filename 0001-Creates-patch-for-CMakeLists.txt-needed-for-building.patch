@@ -1,0 +1,33 @@
+From 22bb5a81eda35c7ffae7382564eb341092ccb29c Mon Sep 17 00:00:00 2001
+From: Philipp Trommler <philipp.trommler@mailbox.tu-dresden.de>
+Date: Mon, 26 Sep 2016 11:49:34 +0200
+Subject: [PATCH] Creates patch for `CMakeLists.txt` needed for building
+ without installed Score-P.
+
+---
+ CMakeLists.txt | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index fba6a21..8e7a19e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,8 +5,6 @@ option(BUILD_DEBUG "Include debugging symbols in library and print some usefull
+ 
+ set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/common)
+ 
+-find_package(Scorep REQUIRED)
+-
+ set(PLUGIN_SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/dynamic-filtering.c)
+ 
+ add_definitions("-Wall -Wextra -pedantic -std=c11")
+@@ -15,5 +13,5 @@ if(BUILD_DEBUG)
+ 	add_definitions("-ggdb -DDYNAMIC_FILTERING_DEBUG")
+ endif()
+ 
+-include_directories(${PROJECT_SOURCE_DIR}/src/ ${SCOREP_INCLUDE_DIRS})
++include_directories(${PROJECT_SOURCE_DIR}/src/ ${PROJECT_SOURCE_DIR}/build/scorep_substrates_dynamic_filtering/include/ ${PROJECT_SOURCE_DIR}/build/scorep_substrates_dynamic_filtering/include/scorep/)
+ add_library(${PROJECT_NAME} SHARED ${PLUGIN_SOURCE_FILES})
+-- 
+2.10.0
+
