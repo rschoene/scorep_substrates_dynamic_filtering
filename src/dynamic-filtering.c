@@ -205,7 +205,12 @@ static void get_instrumentation_call_type( )
             exit_func = "scorep_plugin_exit_region";
             return;
         }
-        // TODO: else if Intel compiler
+        else if( strncmp( sym, "__VT_IntelEntry", 15 ) == 0 )
+        {
+            enter_func = "__VT_IntelEntry";
+            exit_func = "__VT_IntelExit";
+            return;
+        }
     }
 }
 
@@ -224,6 +229,12 @@ static void get_instrumentation_call_type( )
  */
 static char* get_function_call_ip( const char*                                      function_name )
 {
+    // If we haven't found the instrumentation type, we can't search for call IPs
+    if( !function_name )
+    {
+        return 0;
+    }
+
     unw_cursor_t cursor;
     unw_context_t uc;
     unw_word_t ip, offset;
