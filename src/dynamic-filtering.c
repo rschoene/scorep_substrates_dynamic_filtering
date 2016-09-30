@@ -105,6 +105,7 @@ size_t id;
 /** Internal substrates callbacks for information retrieval about handles */
 const char* (*get_region_name)( SCOREP_RegionHandle handle );
 SCOREP_ParadigmType (*get_paradigm_type)( SCOREP_RegionHandle handle );
+uint32_t (*get_location_id)( const struct SCOREP_Location* location );
 
 /** Name of the enter region instrumentation call */
 char* enter_func = NULL;
@@ -305,36 +306,6 @@ static void delete_regions( )
 }
 
 /**
- * Get the thread local information for the given region.
- *
- * This is the correct way to access the thread local information for a region. This function checks
- * if the calling thread already has information about the region asked for and creates it if
- * needed.
- *
- * @param   region_handle                   The region to access the thread local information for.
- *
- * @return                                  The thread local information for the given region and
- *                                          the calling thread.
- */
-static local_region_info* get_local_info( uint32_t                                  region_handle )
-{
-    local_region_info* ret;
-
-    // Try to find an already existant local info object.
-    HASH_FIND( hh, local_info, &region_handle, sizeof( uint32_t ), ret );
-
-    // If we haven't found it, create a new one and append it to the hash table.
-    if( ret == NULL )
-    {
-        ret = calloc( 1, sizeof( local_region_info ) );
-        ret->region_handle = region_handle;
-        HASH_ADD( hh, local_info, region_handle, sizeof( uint32_t ), ret );
-    }
-
-    return ret;
-}
-
-/**
  * Thread fork event.
  *
  * As long as there's more than one thread, there's no save way to make any changes to their common
@@ -397,7 +368,9 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
                 {
                     pthread_mutex_lock( &mtx );
                     to_change->call_cnt += current->call_cnt;
+                    current->call_cnt = 0;
                     to_change->duration += current->duration;
+                    current->duration = 0;
 
                     if( filtering_absolute )
                     {
@@ -443,14 +416,9 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
                 }
             }
         }
-
-        HASH_DEL( local_info, current );
-        free( current );
     }
 
     pthread_mutex_unlock( &deletion_barrier );
-
-    local_info = NULL;
 }
 
 /**
@@ -509,7 +477,8 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
     }
     else
     {
-        local_region_info* info = get_local_info( region_handle );
+        local_region_info* info;
+        HASH_FIND( hh, local_info, &region_handle, sizeof( uint32_t ), info );
 
         // Store the last (this) entry for the current thread.
         info->last_enter = timestamp;
@@ -604,7 +573,8 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
     }
     else
     {
-        local_region_info* info = get_local_info( region_handle );
+        local_region_info* info;
+        HASH_FIND( hh, local_info, &region_handle, sizeof( uint32_t ), info );
 
         // Region not (yet) ready for deletion so update the metrics.
         info->call_cnt++;
@@ -623,6 +593,8 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 static void on_define_region( SCOREP_AnyHandle                                      handle,
                               SCOREP_HandleType                                     type )
 {
+    // This plugin can only handle compiler instrumentation, so we can safely ignore all other
+    // regions.
     if( type != SCOREP_HANDLE_TYPE_REGION
         || (*get_paradigm_type)( handle ) != SCOREP_PARADIGM_COMPILER )
     {
@@ -631,10 +603,13 @@ static void on_define_region( SCOREP_AnyHandle                                  
 
     region_info* new;
 
+    // Check if this region handle is already registered, as this shouldn't happen.
     HASH_FIND( hh, regions, &handle, sizeof( uint32_t ), new );
     if( new == NULL )
     {
         const char* region_name = (*get_region_name)( handle );
+
+        fprintf( stderr, "Region definition: %s\n", region_name );
 
         new = calloc( 1, sizeof( region_info ) );
         new->region_handle = handle;
@@ -652,15 +627,65 @@ static void on_define_region( SCOREP_AnyHandle                                  
 }
 
 /**
+ * Called whenever a location is created.
+ *
+ * When a location (e.g. an OpenMP thread) is created, we have to copy all region definitions into
+ * a location-local storage to gain a lock free data access.
+ *
+ * @param   location                        The location which is created (unused).
+ * @param   parent_location                 The location's parent location (unused).
+ */
+void on_create_location( __attribute__((unused)) struct SCOREP_Location*            location,
+                         __attribute__((unused)) struct SCOREP_Location*            parent_location )
+{
+    if( (*get_location_id)( location ) == 0 )
+    {
+        // Mark the main thread as the main thread.
+        main_thread = true;
+    }
+    else
+    {
+        // All other threads store their info in thread local storage to avoid synchronization.
+        region_info *current, *tmp;
+        local_region_info* new;
+
+        HASH_ITER( hh, regions, current, tmp )
+        {
+            new = calloc( 1, sizeof( local_region_info ) );
+            new->region_handle = current->region_handle;
+            HASH_ADD( hh, local_info, region_handle, sizeof( uint32_t ), new );
+        }
+    }
+}
+
+/**
+ * Called whenever a location is deleted.
+ *
+ * If a location (e.g. a OpenMP thread) is deleted, its data is not needed any longer. So it can
+ * safely be freed.
+ *
+ * @param   location                        The location which is deleted (unused).
+ */
+void on_delete_location( __attribute__((unused)) struct SCOREP_Location*            location )
+{
+    local_region_info *current, *tmp;
+
+    HASH_ITER( hh, local_info, current, tmp )
+    {
+        HASH_DEL( local_info, current );
+        free( current );
+    }
+
+    local_info = NULL;
+}
+
+/**
  * The plugin's initialization method.
  *
  * Just sets some default values and reads some environment variables.
  */
 static int init( void )
 {
-    // Mark this thread as the main thread.
-    main_thread = true;
-
     // Get the threshold for filtering.
     char* env_str = getenv( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD" );
     if( env_str == NULL )
@@ -709,14 +734,14 @@ static void assign( size_t                                                      
     id = s_id;
 }
 
-/**
- * Finalizing method.
- *
- * Mainly used for cleanup.
- */
-static size_t finalize( void )
-{
 #ifdef DYNAMIC_FILTERING_DEBUG
+/**
+ * Debug output at the end of the program.
+ *
+ * Only used if the plugin has been built with -DBUILD_DEBUG=on.
+ */
+static void on_write_data( void )
+{
     fprintf( stderr, "\n\nFinalizing.\n\n\n" );
     fprintf( stderr, "Global mean duration: %f\n\n", mean_duration );
     fprintf( stderr, "|                  Region Name                  "
@@ -725,12 +750,10 @@ static size_t finalize( void )
                      "|        Duration        "
                      "|   Mean duration  "
                      "|   Status  |\n" );
-#endif
     region_info *current, *tmp;
 
     HASH_ITER( hh, regions, current, tmp )
     {
-#ifdef DYNAMIC_FILTERING_DEBUG
         fprintf( stderr, "| %-45s | %13d | %10lu | %22lu | %16f | %-9s |\n",
                     current->region_name,
                     current->region_handle,
@@ -738,7 +761,21 @@ static size_t finalize( void )
                     current->duration,
                     current->mean_duration,
                     current->deletable ? ( current->inactive ? "deleted" : "deletable" ) : " " );
+    }
+}
 #endif
+
+/**
+ * Finalizing method.
+ *
+ * Mainly used for cleanup.
+ */
+static size_t finalize( void )
+{
+    region_info *current, *tmp;
+
+    HASH_ITER( hh, regions, current, tmp )
+    {
         HASH_DEL( regions, current );
         free( current );
     }
@@ -774,7 +811,7 @@ static uint32_t event_functions( __attribute__((unused)) SCOREP_Substrates_Mode 
 /**
  * Gets the callbacks for information retrieval about handles.
  *
- * Just stores all callbacks provided by the substrates API in the struct 'cb' for later use.
+ * Just stores the callbacks used by this plugin for later use.
  *
  * @param   callbacks                       The callbacks to be stored.
  * @param   size                            The size of the struct containing the callbacks.
@@ -783,8 +820,9 @@ static uint32_t event_functions( __attribute__((unused)) SCOREP_Substrates_Mode 
 void set_callbacks( SCOREP_SubstrateCallbacks                                       callbacks,
                     __attribute__((unused)) size_t                                  size )
 {
-    get_region_name = callbacks.SCOREP_RegionHandle_GetName;
-    get_paradigm_type = callbacks.SCOREP_RegionHandle_GetParadigmType;
+    get_region_name         = callbacks.SCOREP_RegionHandle_GetName;
+    get_paradigm_type       = callbacks.SCOREP_RegionHandle_GetParadigmType;
+    get_location_id         = callbacks.SCOREP_Location_GetId;
 }
 
 /**
@@ -800,6 +838,11 @@ SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering_plugin )
     info.assign_id              = assign;
     info.finalize               = finalize;
     info.define_handle          = on_define_region;
+    info.create_location        = on_create_location;
+    info.delete_location        = on_delete_location;
+#ifdef DYNAMIC_FILTERING_DEBUG
+    info.write_data             = on_write_data;
+#endif
     info.get_event_functions    = event_functions;
     info.set_callbacks          = set_callbacks;
 

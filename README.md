@@ -1,6 +1,6 @@
 # Dynamic Filtering Plugin for Score-P
 
-This plugin filters instrumentation calls from an binary instrumented with Score-P. Filtered calls
+This plugin filters instrumentation calls from a binary instrumented with Score-P. Filtered calls
 are overwritten with `NOP`s to minimize overhead.
 
 This work is part of my bachelor's thesis. Results will be made available as soon as they're ready.
