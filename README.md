@@ -42,6 +42,13 @@ To compile this plugin, you need:
 
         cmake .. -DBUILD_DEBUG=on
 
+    This plugin defaults to the identity function as the hash for `uthash` as this has proven
+    slightly faster than the built-ins of `uthash`. However, if you experience performance issues
+    during hash table access, you can choose one of the built-in functions as mentioned
+    [here](http://troydhanson.github.io/uthash/userguide.html#hash_functions), e.g.:
+
+        cmake .. -DHASH_FUNCTION=HASH_JEN
+
 3. Invoke make
 
         make

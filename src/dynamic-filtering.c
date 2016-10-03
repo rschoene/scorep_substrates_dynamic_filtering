@@ -16,6 +16,23 @@
 #include <SCOREP_PublicHandles.h>
 #include <SCOREP_PublicTypes.h>
 
+/**
+ * Default to own built-in hash function.
+ */
+#ifndef HASH_FUNCTION
+#define HASH_FUNCTION HASH_OWN
+#endif
+
+/**
+ * Simple identity hash function.
+ *
+ * This has proven slightly faster than the internal uthash hash functions.
+ */
+#define HASH_OWN( key, keylen, hashv )                                                            \
+{                                                                                                 \
+    hashv = *key;                                                                                 \
+}
+
 #include "uthash.h"
 
 /**
