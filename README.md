@@ -89,6 +89,13 @@ The configuration of the plugin is done via environment variables.
 
 3. Open an [issue on Github](https://github.com/Ferruck/scorep_substrates_dynamic_filtering/issues).
 
+## License
+
+For information regarding the license of this plugin, see
+[LICENSE](https://github.com/Ferruck/scorep_substrates_dynamic_filtering/blob/master/LICENSE), for
+the license of `uthash` see
+[uthash.LICENSE](https://github.com/Ferruck/scorep_substrates_dynamic_filtering/blob/master/uthash.LICENSE).
+
 ## Author
 
 * Philipp Trommler (philipp.trommler at tu-dresden dot de)
