@@ -1,18 +1,17 @@
-From 22bb5a81eda35c7ffae7382564eb341092ccb29c Mon Sep 17 00:00:00 2001
+From 70d8f7fb0694ddccd1ed3e8eb090955ca6e7f2a2 Mon Sep 17 00:00:00 2001
 From: Philipp Trommler <philipp.trommler@mailbox.tu-dresden.de>
-Date: Mon, 26 Sep 2016 11:49:34 +0200
-Subject: [PATCH] Creates patch for `CMakeLists.txt` needed for building
- without installed Score-P.
+Date: Tue, 4 Oct 2016 09:27:57 +0200
+Subject: [PATCH] Recreating `CMakeLists.txt` patch.
 
 ---
  CMakeLists.txt | 4 +---
  1 file changed, 1 insertion(+), 3 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index fba6a21..8e7a19e 100644
+index 89effcf..d1ea65a 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -5,8 +5,6 @@ option(BUILD_DEBUG "Include debugging symbols in library and print some usefull
+@@ -6,8 +6,6 @@ set(HASH_FUNCTION "HASH_OWN" CACHE STRING "Use other than identity function as h
  
  set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/common)
  
@@ -20,8 +19,8 @@ index fba6a21..8e7a19e 100644
 -
  set(PLUGIN_SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/dynamic-filtering.c)
  
- add_definitions("-Wall -Wextra -pedantic -std=c11")
-@@ -15,5 +13,5 @@ if(BUILD_DEBUG)
+ add_definitions("-Wall -Wextra -pedantic -std=c11 -DHASH_FUNCTION=${HASH_FUNCTION}")
+@@ -16,5 +14,5 @@ if(BUILD_DEBUG)
  	add_definitions("-ggdb -DDYNAMIC_FILTERING_DEBUG")
  endif()
  
