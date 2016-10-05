@@ -626,8 +626,6 @@ static void on_define_region( SCOREP_AnyHandle                                  
     {
         const char* region_name = (*get_region_name)( handle );
 
-        fprintf( stderr, "Region definition: %s\n", region_name );
-
         new = calloc( 1, sizeof( region_info ) );
         new->region_handle = handle;
         new->region_name = calloc( 1, strlen( region_name ) * sizeof( char ) );
