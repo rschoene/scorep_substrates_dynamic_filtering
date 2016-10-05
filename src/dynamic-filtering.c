@@ -143,7 +143,16 @@ static void update_mean_duration( )
 
     HASH_ITER( hh, regions, current, tmp )
     {
-        new_duration += current->mean_duration;
+        // Only use active regions for calculating the mean duration.
+#ifdef DYNAMIC_FILTERING_DEBUG
+        if( !current->inactive )
+#else
+        if( !current->deletable && !current->inactive )
+#endif
+        {
+            new_duration += current->mean_duration;
+            ctr++;
+        }
     }
 
     mean_duration = new_duration / ctr;
