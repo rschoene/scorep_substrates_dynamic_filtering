@@ -507,7 +507,10 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         HASH_FIND( hh, local_info, &region_handle, sizeof( uint32_t ), info );
 
         // Store the last (this) entry for the current thread.
-        info->last_enter = timestamp;
+        if( info != NULL )
+        {
+            info->last_enter = timestamp;
+        }
     }
 }
 
@@ -603,8 +606,11 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
         HASH_FIND( hh, local_info, &region_handle, sizeof( uint32_t ), info );
 
         // Region not (yet) ready for deletion so update the metrics.
-        info->call_cnt++;
-        info->duration += ( timestamp - info->last_enter );
+        if( info != NULL )
+        {
+            info->call_cnt++;
+            info->duration += ( timestamp - info->last_enter );
+        }
     }
 }
 
