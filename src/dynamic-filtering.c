@@ -40,14 +40,14 @@
  */
 typedef struct region_info
 {
+    /** Handle for uthash usage */
+    UT_hash_handle hh;
     /** Global counter for region entries */
     uint64_t call_cnt;
     /** Global calculated region duration */
     uint64_t duration;
     /** Timestamp of last enter into this region (used by main thread) */
     uint64_t last_enter;
-    /** Handle for uthash usage */
-    UT_hash_handle hh;
     /** Pointer to the callq for the enter instrumentation function */
     char* enter_func;
     /** Pointer to the callq for the exit instrumentation function */
@@ -74,29 +74,42 @@ typedef struct region_info
  */
 typedef struct local_region_info
 {
+    /** Handle for uthash usage */
+    UT_hash_handle hh;
     /** Local counter for region entries */
     uint64_t call_cnt;
     /** Local calculated region duration */
     uint64_t duration;
     /** Timestamp of last enter into this region */
     uint64_t last_enter;
-    /** Handle for uthash usage */
-    UT_hash_handle hh;
     /** Region id this info belongs to */
     uint32_t region_handle;
+    /** Pointer to the callq for the enter instrumentation function */
+    char* enter_func;
+    /** Pointer to the callq for the exit instrumentation function */
+    char* exit_func;
 } local_region_info;
 
 /** Global list of defined regions */
 region_info* regions = NULL;
 
+/** Number of created threads */
+uint32_t num_threads = 0;
+
 /** Thread local region info */
-__thread local_region_info* local_info = NULL;
+local_region_info** local_info_array = NULL;
+
+/** Thread-local index for accessing the thread-local part of the array */
+__thread uint32_t local_info_array_index;
 
 /** General mutex used as a guard for writing region info */
 pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 
-/** Special mutex used for stopping new threads entering regions while deleting calls */
-pthread_mutex_t deletion_barrier = PTHREAD_MUTEX_INITIALIZER;
+/** Special mutex used for protecting the thread counter */
+pthread_mutex_t thread_ctr_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+/** Special mutex used for protecting the number of threads */
+pthread_mutex_t num_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /** Thread counter */
 uint64_t thread_ctr = 0;
@@ -332,11 +345,10 @@ static void delete_regions( )
 }
 
 /**
- * Thread fork event.
+ * Team begin event.
  *
- * As long as there's more than one thread, there's no save way to make any changes to their common
- * TXT segment. So we have to notice the creation of threads and wait untill all of them have
- * joined.
+ * As long as there's multithreaded execution, there's no safe way to filter functions. So we've to
+ * notice the begin of a multithreaded part of execution to stop filtering.
  *
  * @param   scorep_location                 unused
  * @param   timestamp                       unused
@@ -348,13 +360,13 @@ static void on_team_begin( __attribute__((unused)) struct SCOREP_Location*      
                            __attribute__((unused)) SCOREP_ParadigmType              scorep_paradigm,
                            __attribute__((unused)) SCOREP_InterimCommunicatorHandle scorep_thread_team )
 {
-    pthread_mutex_lock( &deletion_barrier );
+    pthread_mutex_lock( &thread_ctr_mtx );
     thread_ctr++;
-    pthread_mutex_unlock( &deletion_barrier );
+    pthread_mutex_unlock( &thread_ctr_mtx );
 }
 
 /**
- * Thread join event.
+ * Team end event.
  *
  * See on_team_begin.
  *
@@ -368,83 +380,86 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
                          __attribute__((unused)) SCOREP_ParadigmType                scorep_paradigm,
                          __attribute__((unused)) SCOREP_InterimCommunicatorHandle   scorep_thread_team )
 {
-    pthread_mutex_lock( &deletion_barrier );
+    pthread_mutex_lock( &thread_ctr_mtx );
     thread_ctr--;
+    pthread_mutex_unlock( &thread_ctr_mtx );
+}
 
-    // Copy the thread local info into the global table and free the thread local storage
-    region_info* to_change;
-    local_region_info *current, *tmp;
+/**
+ * Thread join event.
+ *
+ * This is emitted when all threads finished on_team_end. As all information is gathered in the
+ * global storage, the main thread can recalculate the metrics.
+ *
+ * @param scorep_location                   unused
+ * @param timestamp                         unused
+ * @param scorep_paradigm                   unused
+ */
+void on_join( __attribute__((unused)) struct SCOREP_Location*                       scorep_location,
+              __attribute__((unused)) uint64_t                                      timestamp,
+              __attribute__((unused)) SCOREP_ParadigmType                           paradigm_type )
+{
+    region_info *to_change, *tmp;
 
-    HASH_ITER( hh, local_info, current, tmp )
+    // Recalculate all filter decisions.
+    HASH_ITER( hh, regions, to_change, tmp )
     {
-        HASH_FIND( hh, regions, &current->region_handle, sizeof( uint32_t ), to_change );
-
-        // The main thread does all this in on_exit_region so no need to do it here as well.
-        if( !main_thread )
+        // Combine the locally gathered information with the global ones.
+        for( uint32_t i = 0; i < num_threads; ++i )
         {
-            // Some regions don't yet exist when the team ends sometimes. Don't know why.
-            if( to_change != NULL )
+            local_region_info* local;
+            HASH_FIND( hh, local_info_array[i], &to_change->region_handle,
+                                                                    sizeof( uint32_t ), local );
+
+            if( local != NULL )
             {
-                // If the region already has been deleted or marked as deletable, skip the next steps.
-#ifdef DYNAMIC_FILTERING_DEBUG
-                if( !to_change->inactive )
-#else
-                if( !to_change->deletable && !to_change->inactive )
-#endif
+                to_change->call_cnt += local->call_cnt;
+                local->call_cnt = 0;
+                to_change->duration += local->duration;
+                local->duration = 0;
+
+                if( to_change->enter_func == 0 && local->enter_func != 0 )
                 {
-                    pthread_mutex_lock( &mtx );
-                    to_change->call_cnt += current->call_cnt;
-                    current->call_cnt = 0;
-                    to_change->duration += current->duration;
-                    current->duration = 0;
+                    to_change->enter_func = local->enter_func;
+                }
 
-                    if( filtering_absolute )
-                    {
-                        // We're filtering absolute so just compare this region's mean duration with
-                        // the threshold.
-                        if( ( (float) to_change->duration / to_change->call_cnt ) < threshold )
-                        {
-                            if( !to_change->exit_func )
-                            {
-                                to_change->exit_func =
-                                                get_function_call_ip( exit_func );
-                            }
-                            to_change->deletable = true;
-                        }
-                    }
-                    else
-                    {
-                        // We're filtering relative so first update all regions' mean durations and
-                        // then compare the duration of this region with the mean of all regions.
-                        if( to_change->call_cnt == 0 )
-                        {
-                            to_change->mean_duration = 0;
-                        }
-                        else
-                        {
-                            to_change->mean_duration = (float) to_change->duration /
-                                                                    to_change->call_cnt;
-                        }
-
-                        update_mean_duration( );
-
-                        if( to_change->mean_duration < mean_duration - threshold )
-                        {
-                            if( !to_change->exit_func )
-                            {
-                                to_change->exit_func =
-                                                get_function_call_ip( exit_func );
-                            }
-                            to_change->deletable = true;
-                        }
-                    }
-                    pthread_mutex_unlock( &mtx );
+                if( to_change->exit_func == 0 && local->exit_func != 0 )
+                {
+                    to_change->exit_func = local->exit_func;
                 }
             }
         }
-    }
 
-    pthread_mutex_unlock( &deletion_barrier );
+        if( filtering_absolute )
+        {
+            // We're filtering absolute so just compare this region's mean duration with the
+            // threshold.
+            if( ( (float) to_change->duration / to_change->call_cnt ) < threshold )
+            {
+                to_change->deletable = true;
+            }
+        }
+        else
+        {
+            // We're filtering relative so first update all regions' mean durations and then
+            // compare the duration of this region with the mean of all regions.
+            if( to_change->call_cnt == 0 )
+            {
+                to_change->mean_duration = 0;
+            }
+            else
+            {
+                to_change->mean_duration = (float) to_change->duration / to_change->call_cnt;
+            }
+
+            update_mean_duration( );
+
+            if( to_change->mean_duration < mean_duration - threshold )
+            {
+                to_change->deletable = true;
+            }
+        }
+    }
 }
 
 /**
@@ -486,30 +501,37 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         region_info* region;
         HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
 
+        // Check for missing instruction pointer.
+        if( !region->enter_func )
+        {
+            region->enter_func = get_function_call_ip( enter_func );
+        }
+
         // If the current region is already deleted, skip this whole thing.
         if( !region->inactive )
         {
             pthread_mutex_lock( &mtx );
             region->last_enter = timestamp;
             region->depth++;
-
-            // This region is marked for deletion but not already deleted.
-            if( !region->enter_func )
-            {
-                region->enter_func = get_function_call_ip( enter_func );
-            }
             pthread_mutex_unlock( &mtx );
         }
     }
     else
     {
         local_region_info* info;
-        HASH_FIND( hh, local_info, &region_handle, sizeof( uint32_t ), info );
+        HASH_FIND( hh, local_info_array[local_info_array_index], &region_handle, sizeof( uint32_t ),
+                                                                                            info );
 
-        // Store the last (this) entry for the current thread.
         if( info != NULL )
         {
+            // Store the last (this) entry for the current thread.
             info->last_enter = timestamp;
+
+            // Check for missing instruction pointer.
+            if( !info->enter_func )
+            {
+                info->enter_func = get_function_call_ip( enter_func );
+            }
         }
     }
 }
@@ -539,11 +561,16 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
     // This function could be overwritten. Process it further.
     if( main_thread )
     {
-        pthread_mutex_lock( &deletion_barrier );
         region_info* region;
         HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
 
         region->depth--;
+
+        // Check for missing instruction pointer.
+        if( !region->exit_func )
+        {
+            region->exit_func = get_function_call_ip( exit_func );
+        }
 
         // If the region already has been deleted or marked as deletable, skip the next steps.
 #ifdef DYNAMIC_FILTERING_DEBUG
@@ -561,10 +588,6 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                 // threshold.
                 if( ( (float) region->duration / region->call_cnt ) < threshold )
                 {
-                    if( !region->exit_func )
-                    {
-                        region->exit_func = get_function_call_ip( exit_func );
-                    }
                     region->deletable = true;
                 }
             }
@@ -585,31 +608,36 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 
                 if( region->mean_duration < mean_duration - threshold )
                 {
-                    if( !region->exit_func )
-                    {
-                        region->exit_func = get_function_call_ip( exit_func );
-                    }
                     region->deletable = true;
                 }
             }
         }
 
+        pthread_mutex_lock( &thread_ctr_mtx );
         if( thread_ctr == 0 )
         {
+            // Single threaded execution, time for filtering.
             delete_regions( );
         }
-        pthread_mutex_unlock( &deletion_barrier );
+        pthread_mutex_unlock( &thread_ctr_mtx );
     }
     else
     {
         local_region_info* info;
-        HASH_FIND( hh, local_info, &region_handle, sizeof( uint32_t ), info );
+        HASH_FIND( hh, local_info_array[local_info_array_index], &region_handle, sizeof( uint32_t ),
+                                                                                            info );
 
-        // Region not (yet) ready for deletion so update the metrics.
         if( info != NULL )
         {
+            // Region not (yet) ready for deletion so update the metrics.
             info->call_cnt++;
             info->duration += ( timestamp - info->last_enter );
+
+            // Check for missing instruction pointer.
+            if( !info->exit_func )
+            {
+                info->exit_func = get_function_call_ip( exit_func );
+            }
         }
     }
 }
@@ -646,9 +674,7 @@ static void on_define_region( SCOREP_AnyHandle                                  
         new->region_name = calloc( 1, strlen( region_name ) * sizeof( char ) );
         memcpy( new->region_name, region_name, strlen( region_name ) * sizeof( char ) );
 
-        pthread_mutex_lock( &mtx );
         HASH_ADD( hh, regions, region_handle, sizeof( uint32_t ), new );
-        pthread_mutex_unlock( &mtx );
     }
     else
     {
@@ -665,7 +691,7 @@ static void on_define_region( SCOREP_AnyHandle                                  
  * @param   location                        The location which is created (unused).
  * @param   parent_location                 The location's parent location (unused).
  */
-void on_create_location( __attribute__((unused)) struct SCOREP_Location*            location,
+void on_create_location( struct SCOREP_Location*                                    location,
                          __attribute__((unused)) struct SCOREP_Location*            parent_location )
 {
     if( (*get_location_id)( location ) == 0 )
@@ -675,6 +701,15 @@ void on_create_location( __attribute__((unused)) struct SCOREP_Location*        
     }
     else
     {
+        // Get array index for thread local storage
+        pthread_mutex_lock( &num_threads_mtx );
+        local_info_array_index = num_threads;
+        num_threads++;
+        local_info_array = (local_region_info**) realloc( local_info_array,
+                                                    sizeof( local_region_info* ) * num_threads );
+        local_info_array[local_info_array_index] = NULL;
+        pthread_mutex_unlock( &num_threads_mtx );
+
         // All other threads store their info in thread local storage to avoid synchronization.
         region_info *current, *tmp;
         local_region_info* new;
@@ -683,7 +718,8 @@ void on_create_location( __attribute__((unused)) struct SCOREP_Location*        
         {
             new = calloc( 1, sizeof( local_region_info ) );
             new->region_handle = current->region_handle;
-            HASH_ADD( hh, local_info, region_handle, sizeof( uint32_t ), new );
+            HASH_ADD( hh, local_info_array[local_info_array_index], region_handle,
+                                                                        sizeof( uint32_t ), new );
         }
     }
 }
@@ -700,13 +736,22 @@ void on_delete_location( __attribute__((unused)) struct SCOREP_Location*        
 {
     local_region_info *current, *tmp;
 
-    HASH_ITER( hh, local_info, current, tmp )
+    HASH_ITER( hh, local_info_array[local_info_array_index], current, tmp )
     {
-        HASH_DEL( local_info, current );
+        HASH_DEL( local_info_array[local_info_array_index], current );
         free( current );
     }
 
-    local_info = NULL;
+    local_info_array[local_info_array_index] = NULL;
+
+    pthread_mutex_lock( &num_threads_mtx );
+    num_threads--;
+    pthread_mutex_unlock( &num_threads_mtx );
+
+    if( num_threads == 0 )
+    {
+        free( local_info_array );
+    }
 }
 
 /**
@@ -833,6 +878,7 @@ static uint32_t event_functions( __attribute__((unused)) SCOREP_Substrates_Mode 
     ret[SCOREP_EVENT_EXIT_REGION]  = (SCOREP_Substrates_Callback) on_exit_region;
     ret[SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_BEGIN]  = (SCOREP_Substrates_Callback) on_team_begin;
     ret[SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_END]    = (SCOREP_Substrates_Callback) on_team_end;
+    ret[SCOREP_EVENT_THREAD_FORK_JOIN_JOIN]        = (SCOREP_Substrates_Callback) on_join;
 
     *functions = ret;
     return SCOREP_SUBSTRATES_NUM_EVENTS;
