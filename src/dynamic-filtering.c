@@ -96,8 +96,13 @@ region_info* regions = NULL;
 /** Number of created threads */
 uint32_t num_threads = 0;
 
+/** Default to max 512 threads that are observed */
+#ifndef MAX_THREAD_CNT
+#define MAX_THREAD_CNT 512
+#endif
+
 /** Thread local region info */
-local_region_info** local_info_array = NULL;
+local_region_info* local_info_array[MAX_THREAD_CNT];
 
 /** Thread-local index for accessing the thread-local part of the array */
 __thread uint32_t local_info_array_index;
@@ -402,8 +407,10 @@ void on_join( __attribute__((unused)) struct SCOREP_Location*                   
     // Recalculate all filter decisions.
     HASH_ITER( hh, regions, to_change, tmp )
     {
+        uint32_t border = num_threads > MAX_THREAD_CNT ? MAX_THREAD_CNT : num_threads;
+
         // Combine the locally gathered information with the global ones.
-        for( uint32_t i = 0; i < num_threads; ++i )
+        for( uint32_t i = 0; i < border; ++i )
         {
             local_region_info* local;
             HASH_FIND( hh, local_info_array[i], &to_change->region_handle,
@@ -514,7 +521,7 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
             pthread_mutex_unlock( &mtx );
         }
     }
-    else
+    else if( local_info_array_index < MAX_THREAD_CNT )
     {
         local_region_info* info;
         HASH_FIND( hh, local_info_array[local_info_array_index], &region_handle, sizeof( uint32_t ),
@@ -619,7 +626,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
         }
         pthread_mutex_unlock( &thread_ctr_mtx );
     }
-    else
+    else if( local_info_array_index < MAX_THREAD_CNT )
     {
         local_region_info* info;
         HASH_FIND( hh, local_info_array[local_info_array_index], &region_handle, sizeof( uint32_t ),
@@ -703,10 +710,15 @@ void on_create_location( struct SCOREP_Location*                                
         pthread_mutex_lock( &num_threads_mtx );
         local_info_array_index = num_threads;
         num_threads++;
-        local_info_array = (local_region_info**) realloc( local_info_array,
-                                                    sizeof( local_region_info* ) * num_threads );
-        local_info_array[local_info_array_index] = NULL;
         pthread_mutex_unlock( &num_threads_mtx );
+
+        if( local_info_array_index >= MAX_THREAD_CNT )
+        {
+            fprintf( stderr, "Maximum thread count reached. No information gathered for this thread."
+                             " To increase the maximum number of observable threads you need to "
+                             "recompile the plugin.\n" );
+            return;
+        }
 
         // All other threads store their info in thread local storage to avoid synchronization.
         region_info *current, *tmp;
@@ -726,30 +738,28 @@ void on_create_location( struct SCOREP_Location*                                
  * Called whenever a location is deleted.
  *
  * If a location (e.g. a OpenMP thread) is deleted, its data is not needed any longer. So it can
- * safely be freed.
+ * safely be deleted.
  *
  * @param   location                        The location which is deleted (unused).
  */
 void on_delete_location( __attribute__((unused)) struct SCOREP_Location*            location )
 {
-    local_region_info *current, *tmp;
-
-    HASH_ITER( hh, local_info_array[local_info_array_index], current, tmp )
+    if( local_info_array_index < MAX_THREAD_CNT )
     {
-        HASH_DEL( local_info_array[local_info_array_index], current );
-        free( current );
-    }
+        local_region_info *current, *tmp;
 
-    local_info_array[local_info_array_index] = NULL;
+        HASH_ITER( hh, local_info_array[local_info_array_index], current, tmp )
+        {
+            HASH_DEL( local_info_array[local_info_array_index], current );
+            free( current );
+        }
+
+        local_info_array[local_info_array_index] = NULL;
+    }
 
     pthread_mutex_lock( &num_threads_mtx );
     num_threads--;
     pthread_mutex_unlock( &num_threads_mtx );
-
-    if( num_threads == 0 )
-    {
-        free( local_info_array );
-    }
 }
 
 /**

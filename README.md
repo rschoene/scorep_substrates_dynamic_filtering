@@ -49,6 +49,13 @@ To compile this plugin, you need:
 
         cmake .. -DHASH_FUNCTION=HASH_JEN
 
+    By default, only the first 512 created threads are observed by the plugin. If your program uses
+    more than 512 threads and you want all of them to be observed, you can increase this maximum
+    by passing a higher value as `MAX_THREAD_CNT` to CMake. You can also lower the number of
+    observed threads which may lead to a slightly lower overhead (but may also change the results).
+
+        cmake .. -DMAX_THREAD_CNT=1024
+
 3. Invoke make
 
         make
