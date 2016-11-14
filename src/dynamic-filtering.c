@@ -2,6 +2,8 @@
 #define _GNU_SOURCE /* <- needed for libunwind so stack_t is known */
 
 #include <stddef.h> /* <- needs to come before libunwind for size_t */
+#include <errno.h>
+#include <fcntl.h>
 #include <libunwind.h>
 #include <string.h>
 #include <pthread.h>
@@ -851,19 +853,72 @@ static void on_write_data( void )
 /**
  * Finalizing method.
  *
- * Mainly used for cleanup.
+ * Used for cleanup and writing the filter file.
  */
 static size_t finalize( void )
 {
-    region_info *current, *tmp;
+    char filename[128], backup[128];
+    sprintf( filename, "df-filter.list.%d", getpid( ) );
+    sprintf( backup, "%s.old", filename );
 
-    HASH_ITER( hh, regions, current, tmp )
+    int fd = open( filename, O_CREAT | O_WRONLY | O_EXCL, S_IRUSR | S_IWUSR );
+    if( fd < 0 && errno == EEXIST )
     {
-        HASH_DEL( regions, current );
-        free( current );
+        // File could not be created because it already exists. Let's move it as a backup.
+        rename( filename, backup );
+        fd = open( filename, O_CREAT | O_WRONLY | O_EXCL, S_IRUSR | S_IWUSR );
     }
 
-    regions = NULL;
+    if( fd > 0 )
+    {
+        // File could be created. Write a Score-P filter file to it.
+        FILE* fp = fdopen( fd, "w" );
+
+        fprintf( fp, "SCOREP_REGION_NAMES_BEGIN\n" );
+
+        region_info *current, *tmp;
+        bool first = true;
+
+        HASH_ITER( hh, regions, current, tmp )
+        {
+            if( current->inactive )
+            {
+                if( first )
+                {
+                    fprintf( fp, "EXCLUDE %s\n", current->region_name );
+                    first = false;
+                }
+                else
+                {
+                    fprintf( fp, "        %s\n", current->region_name );
+                }
+            }
+
+            HASH_DEL( regions, current );
+            free( current );
+        }
+
+        regions = NULL;
+
+        fprintf( fp, "SCOREP_REGION_NAMES_END\n" );
+        fclose( fp );
+    }
+    else
+    {
+        // File still could not be created. Dump an error message.
+        fprintf( stderr, "Couldn't create filter list. Please check if you have write "
+                         "permissions for the current working directory.\n" );
+
+        region_info *current, *tmp;
+
+        HASH_ITER( hh, regions, current, tmp )
+        {
+            HASH_DEL( regions, current );
+            free( current );
+        }
+
+        regions = NULL;
+    }
 
     return id;
 }
