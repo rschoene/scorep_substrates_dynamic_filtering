@@ -114,9 +114,6 @@ pthread_mutex_t num_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
 /** Thread counter */
 uint64_t thread_ctr = 0;
 
-/** Flag indicating we're deletion ready */
-bool deletion_ready = false;
-
 /** Flag indicating the filtering method to be used (true = absolute, false = relative) */
 bool filtering_absolute;
 
@@ -326,8 +323,9 @@ static void delete_regions( )
     HASH_ITER( hh, regions, current, tmp )
     {
         // Only delete the function calls if the region is marked as deletable, the address of the
-        // entry function call is correctly set and the address of the exit function call is
-        // correctly set.
+        // entry function call and the address of the exit function call are correctly set and the
+        // call stack depth for the function is zero (we're not currently in a recursive call of
+        // that function).
         if( !current->inactive
             && current->deletable
             && current->depth == 0
