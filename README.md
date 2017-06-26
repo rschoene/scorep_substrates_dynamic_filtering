@@ -3,7 +3,7 @@
 This plugin filters instrumentation calls from a binary instrumented with Score-P. Filtered calls
 are overwritten with `NOP`s to minimize overhead.
 
-This work is part of my bachelor's thesis. Results will be made available as soon as they're ready.
+This work is part of Philipp Trommlers bachelor's thesis. Results will be made available as soon as they're ready.
 
 [![build status](https://api.travis-ci.org/rschoene/scorep_substrates_dynamic_filtering.svg)](https://travis-ci.org/rschoene/scorep_substrates_dynamic_filtering)
 
