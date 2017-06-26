@@ -5,7 +5,7 @@ are overwritten with `NOP`s to minimize overhead.
 
 This work is part of my bachelor's thesis. Results will be made available as soon as they're ready.
 
-[![build status](https://api.travis-ci.org/Ferruck/scorep_substrates_dynamic_filtering.svg)](https://travis-ci.org/Ferruck/scorep_substrates_dynamic_filtering)
+[![build status](https://api.travis-ci.org/rschoene/scorep_substrates_dynamic_filtering.svg)](https://travis-ci.org/rschoene/scorep_substrates_dynamic_filtering)
 
 ## Compilation and Installation
 
