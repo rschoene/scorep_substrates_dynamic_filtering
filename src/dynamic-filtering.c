@@ -12,11 +12,9 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <assert.h>
 
-#include <SCOREP_SubstratePlugins.h>
-#include <SCOREP_SubstrateEvents.h>
-#include <SCOREP_PublicHandles.h>
-#include <SCOREP_PublicTypes.h>
+#include <scorep/SCOREP_SubstratePlugins.h>
 
 /**
  * Default to own built-in hash function.
@@ -698,8 +696,8 @@ static void on_define_region( SCOREP_AnyHandle                                  
  * @param   location                        The location which is created (unused).
  * @param   parent_location                 The location's parent location (unused).
  */
-void on_create_location( struct SCOREP_Location*                                    location,
-                         __attribute__((unused)) struct SCOREP_Location*            parent_location )
+void on_create_location( const struct SCOREP_Location*                                    location,
+                         __attribute__((unused)) const struct SCOREP_Location*            parent_location )
 {
     if( (*get_location_id)( location ) == 0 )
     {
@@ -744,7 +742,7 @@ void on_create_location( struct SCOREP_Location*                                
  *
  * @param   location                        The location which is deleted (unused).
  */
-void on_delete_location( __attribute__((unused)) struct SCOREP_Location*            location )
+void on_delete_location( __attribute__((unused)) const struct SCOREP_Location*            location )
 {
     if( local_info_array_index < MAX_THREAD_CNT )
     {
@@ -855,7 +853,7 @@ static void on_write_data( void )
  *
  * Used for cleanup and writing the filter file.
  */
-static size_t finalize( void )
+static void finalize( void )
 {
     char filename[128], backup[128];
     sprintf( filename, "df-filter.list.%d", getpid( ) );
@@ -919,8 +917,6 @@ static size_t finalize( void )
 
         regions = NULL;
     }
-
-    return id;
 }
 
 /**
@@ -956,12 +952,14 @@ static uint32_t event_functions( __attribute__((unused)) SCOREP_Substrates_Mode 
  * @param   size                            The size of the struct containing the callbacks.
  *                                          (unused)
  */
-void set_callbacks( SCOREP_SubstrateCallbacks                                       callbacks,
-                    __attribute__((unused)) size_t                                  size )
+static void set_callbacks (   const SCOREP_SubstratePluginCallbacks*                         callbacks,
+                              __attribute__((unused)) size_t                                 size )
 {
-    get_region_name         = callbacks.SCOREP_RegionHandle_GetName;
-    get_paradigm_type       = callbacks.SCOREP_RegionHandle_GetParadigmType;
-    get_location_id         = callbacks.SCOREP_Location_GetId;
+    assert( sizeof( SCOREP_SubstratePluginCallbacks ) <= size );
+
+    get_region_name         = callbacks->SCOREP_RegionHandle_GetName;
+    get_paradigm_type       = callbacks->SCOREP_RegionHandle_GetParadigmType;
+    get_location_id         = callbacks->SCOREP_Location_GetId;
 }
 
 /**
@@ -971,12 +969,13 @@ void set_callbacks( SCOREP_SubstrateCallbacks                                   
  */
 SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering_plugin )
 {
-    SCOREP_Substrate_Plugin_Info info = { 0 };
+    SCOREP_SubstratePluginInfo info;
+    memset( &info, 0, sizeof( SCOREP_SubstratePluginInfo ) );
 
-    info.early_init             = init;
+    info.init                   = init;
     info.assign_id              = assign;
     info.finalize               = finalize;
-    info.define_handle          = on_define_region;
+    info.new_definition_handle  = on_define_region;
     info.create_location        = on_create_location;
     info.delete_location        = on_delete_location;
 #ifdef DYNAMIC_FILTERING_DEBUG
