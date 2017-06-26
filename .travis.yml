@@ -31,7 +31,7 @@ matrix:
 before_script:
   - mkdir build
   - cd build
-  - git clone https://github.com/Ferruck/scorep_substrates_dynamic_filtering.git
+  - git clone https://github.com/rschoene/scorep_substrates_dynamic_filtering.git
   - cd scorep_substrates_dynamic_filtering
   - git checkout scorep_headers
   - cd ../..
