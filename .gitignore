@@ -5,6 +5,9 @@
 *.lo
 *.so
 *.so.*
+.externalToolBuilders
+.project
 
 # build directories
 build
+_build
