@@ -122,4 +122,5 @@ the license of `uthash` see
 
 ## Author
 
-* Philipp Trommler (philipp.trommler at tu-dresden dot de)
+* Philipp Trommler (https://github.com/Ferruck)
+* Robert Schoene (robert dot schoene at tu-dresden dot de)
