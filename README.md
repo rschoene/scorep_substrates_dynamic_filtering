@@ -70,23 +70,40 @@ To compile this plugin, you need:
 In order to use this plugin, you have to add it to the `SCOREP_SUBSTRATES_PLUGINS` environment
 variable.
 
-    export SCOREP_SUBSTRATES_PLUGINS="dynamic_filtering_plugin"
+    export SCOREP_SUBSTRATE_PLUGINS="dynamic_filtering_plugin"
 
 The configuration of the plugin is done via environment variables.
 
 ### Environment variables
 
-* `SCOREP_SUBSTRATES_DYNAMIC_FILTERING_METHOD` (string)
+* `SCOREP_SUBSTRATE_DYNAMIC_FILTERING_METHOD` (string)
 
     Specifies the metric used by the plugin to determine the instrumentation calls to be filtered.
     Currently supported are `absolute` (filter all functions with a duration below a given
-    threshold) and `relative` (filter all functions with a duration below the mean duration of all
-    functions minus a given threshold).
+    threshold) and `relative` (filter all functions with a duration below the mean duration of all functions minus a given threshold).
 
-* `SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD` (integer)
+* `SCOREP_SUBSTRATE_DYNAMIC_FILTERING_THRESHOLD` (integer, default 100000)
 
-    Specifies the threshold to be used by the metrics. See
-    `SCOREP_SUBSTRATES_DYNAMIC_FILTERING_METHOD` for details.
+    Specifies the threshold to be used by the metrics in Score-P ticks (depends on SCOREP_TIMER)
+    See `SCOREP_SUBSTRATE_DYNAMIC_FILTERING_METHOD` for details.
+
+* `SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CONTINUE_DESPITE_FAILURE` 
+
+    If set to `true`, `True`, `TRUE`, or `1` the plugin will continue to work even though it detected, that the program has been compiled with optimizations that make re-writing impossible (see Known issues).
+    
+* `SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CREATE_REPORT` 
+
+    If set to `true`, `True`, `TRUE`, or `1` the plugin will write a report to stderr when finished
+    
+* `SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CREATE_FILTER_FILE` 
+
+    If set to `true`, `True`, `TRUE`, or `1` the plugin will write a filter file to the experiment directory
+    
+    
+    
+    
+### Known issues
+The compiler optimization `-foptimize-sibling-calls` is usually enabled for icc/gcc at -O2 and -O3. This will be detected by the plugin but the calls cannot be patched in this case. If you want to avoid this, but still use the other optimizations, just pass `-fnooptimize-sibling-calls` to your compiler.
 
 ### If anything fails
 

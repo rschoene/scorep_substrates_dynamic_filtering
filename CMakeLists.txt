@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8)
-project(dynamic_filtering_plugin)
+project(scorep_substrate_dynamic_filtering)
 
 option(BUILD_DEBUG "Include debugging symbols in library and print some usefull output on execution." OFF)
 set(HASH_FUNCTION "HASH_OWN" CACHE STRING "Use other than identity function as hash. See uthash docs for more info.")

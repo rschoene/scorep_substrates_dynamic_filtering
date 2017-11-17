@@ -64,6 +64,8 @@ typedef struct region_info
     bool deletable;
     /** Marks whether the region has been deleted */
     bool inactive;
+    /** Marks whether the region is optimized beyond repair */
+    bool optimized;
 } region_info;
 
 /**
@@ -88,13 +90,15 @@ typedef struct local_region_info
     char* enter_func;
     /** Pointer to the callq for the exit instrumentation function */
     char* exit_func;
+    /** Marks whether the region is optimized beyond repair */
+    bool optimized;
 } local_region_info;
 
 /** Global list of defined regions */
-region_info* regions = NULL;
+static region_info* regions = NULL;
 
 /** Number of created threads */
-uint32_t num_threads = 0;
+static uint32_t num_threads = 0;
 
 /** Default to max 512 threads that are observed */
 #ifndef MAX_THREAD_CNT
@@ -102,48 +106,55 @@ uint32_t num_threads = 0;
 #endif
 
 /** Thread local region info */
-local_region_info* local_info_array[MAX_THREAD_CNT];
+static local_region_info* local_info_array[MAX_THREAD_CNT];
 
 /** Thread-local index for accessing the thread-local part of the array */
-__thread uint32_t local_info_array_index;
+static __thread uint32_t local_info_array_index;
 
 /** General mutex used as a guard for writing region info */
-pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /** Special mutex used for protecting the thread counter */
-pthread_mutex_t thread_ctr_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t thread_ctr_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /** Special mutex used for protecting the number of threads */
-pthread_mutex_t num_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t num_threads_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /** Thread counter */
-uint64_t thread_ctr = 0;
+static uint64_t thread_ctr = 0;
 
 /** Flag indicating the filtering method to be used (true = absolute, false = relative) */
-bool filtering_absolute;
+static bool filtering_absolute = true;
 
 /** Threshold for filtering */
-unsigned long long threshold = 0;
+static unsigned long long threshold = 100000;
 
 /** Mean duration across all regions */
-float mean_duration = 0;
+static float mean_duration = 0;
 
 /** Flag indicating that this current thread is the main thread */
-__thread bool main_thread = false;
+static __thread bool main_thread = false;
 
 /** Internal substrates id */
-size_t id;
+static size_t id;
 
 /** Internal substrates callbacks for information retrieval about handles */
-const char* (*get_region_name)( SCOREP_RegionHandle handle );
-SCOREP_ParadigmType (*get_paradigm_type)( SCOREP_RegionHandle handle );
-uint32_t (*get_location_id)( const struct SCOREP_Location* location );
+static const SCOREP_SubstratePluginCallbacks* callbacks;
 
 /** Name of the enter region instrumentation call */
-char* enter_func = NULL;
+static char* enter_func = NULL;
 
 /** Name of the exit region instrumentation call */
-char* exit_func = NULL;
+static char* exit_func = NULL;
+
+/** Whether to continue despite having detected strong optimizations */
+static bool continue_despite;
+
+/** Whether to create an optimization report */
+static bool create_report;
+
+/** Whether to write a filter file */
+static bool create_filter;
 
 /**
  * Update the mean duration of all regions.
@@ -181,7 +192,7 @@ static void update_mean_duration( )
  *
  * @param   ptr                             Position of the callq to override.
  */
-static void override_callq( char*                                                   ptr )
+static void override_callq( char*                                             ptr )
 {
     // Get the page size of the system we're running on.
     int page_size = sysconf( _SC_PAGE_SIZE );
@@ -198,10 +209,9 @@ static void override_callq( char*                                               
         fprintf( stderr,  "Could not add write permission to memory access rights on position "
                           "%p", ptr );
     }
-
     // Finally write that NOP.
     const char nop[] = { 0x0f, 0x1f, 0x44, 0x00, 0x00 };
-    memcpy( ptr, nop, sizeof( char ) * 5 );
+    memmove( ptr, nop, sizeof( char ) * 5 );
 
     // Remove the write permission.
     if( mprotect( first_ptr, page_size, PROT_READ | PROT_EXEC ) != 0
@@ -269,7 +279,16 @@ static void get_instrumentation_call_type( )
  * @return                                  Pointer to the first byte of the call to the given
  *                                          function in the current call path.
  */
-static char* get_function_call_ip( const char*                                      function_name )
+
+static  char * function_exit_address ;
+static bool printed_warning;
+
+#define DISPLACEMENT(JMPQ_ADDRESS) \
+    (((int32_t) JMPQ_ADDRESS[4])<<24 | ((int32_t) JMPQ_ADDRESS[3])<<16 | ((int32_t) JMPQ_ADDRESS[2])<<8 | ((int32_t) JMPQ_ADDRESS[1]))
+
+
+static char* get_function_call_ip( const char*                                      function_name,
+                                   int is_enter )
 {
     // If we haven't found the instrumentation type, we can't search for call IPs
     if( !function_name )
@@ -298,13 +317,52 @@ static char* get_function_call_ip( const char*                                  
         if( strcmp( sym, function_name ) == 0 )
         {
             found = true;
+            if ( function_exit_address == NULL && is_enter == false )
+            {
+                unw_proc_info_t pip;
+                unw_get_proc_info( &cursor , &pip );
+                function_exit_address = (char *) pip.start_ip;
+            }
         }
 
+        unw_get_reg( &cursor, UNW_REG_IP, &ip );
         if( found && strcmp( sym, function_name ) != 0 )
         {
             // UNW_REG_IP is the first byte _after_ the callq so we need to step back 5 bytes.
             unw_get_reg( &cursor, UNW_REG_IP, &ip );
-            return (char*) ( ip - 5 );
+            if (is_enter)
+            {
+                return (char*) ( ip - 5 );
+            }
+            else
+            {
+                unsigned char * assumed = (unsigned char *) ip - 5;
+                if ( ( *assumed != 0xe8 && *assumed != 0xff && *assumed != 0xea ) ||
+                        ( (char *) ( ip + DISPLACEMENT(assumed) ) != function_exit_address ) )
+
+                {
+                    if ( !printed_warning )
+                    {
+                        fprintf(stderr,"Your program uses (partially) call optimizations, for example \"-foptimize-sibling-calls\". This flag might be included in -O2 and -O3. Try to add the compiler flag \"-fno-optimize-sibling-calls\", which could help this plugin to work.\n");
+                        printed_warning = true;
+                        if ( continue_despite )
+                        {
+                            fprintf(stderr,"Since you specified SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CONTINUE_DESPITE_FAILURE to be true, the plugin will continue nevertheless\n");
+                        }
+                        else
+                        {
+                            fprintf(stderr,"Since you SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CONTINUE_DESPITE_FAILURE is not set to true, the plugin will be disabled\n");
+                        }
+                    }
+
+                    return NULL;
+
+                } else
+                {
+                    return (char*) assumed;
+                }
+
+            }
         }
     }
 
@@ -363,6 +421,7 @@ static void on_team_begin( __attribute__((unused)) struct SCOREP_Location*      
                            __attribute__((unused)) SCOREP_ParadigmType              scorep_paradigm,
                            __attribute__((unused)) SCOREP_InterimCommunicatorHandle scorep_thread_team )
 {
+    if (printed_warning && !continue_despite) return;
     pthread_mutex_lock( &thread_ctr_mtx );
     thread_ctr++;
     pthread_mutex_unlock( &thread_ctr_mtx );
@@ -383,6 +442,7 @@ static void on_team_end( __attribute__((unused)) struct SCOREP_Location*        
                          __attribute__((unused)) SCOREP_ParadigmType                scorep_paradigm,
                          __attribute__((unused)) SCOREP_InterimCommunicatorHandle   scorep_thread_team )
 {
+    if (printed_warning && !continue_despite) return;
     pthread_mutex_lock( &thread_ctr_mtx );
     thread_ctr--;
     pthread_mutex_unlock( &thread_ctr_mtx );
@@ -402,6 +462,7 @@ void on_join( __attribute__((unused)) struct SCOREP_Location*                   
               __attribute__((unused)) uint64_t                                      timestamp,
               __attribute__((unused)) SCOREP_ParadigmType                           paradigm_type )
 {
+    if (printed_warning && !continue_despite) return;
     region_info *to_change, *tmp;
 
     // Recalculate all filter decisions.
@@ -431,6 +492,10 @@ void on_join( __attribute__((unused)) struct SCOREP_Location*                   
                 if( to_change->exit_func == 0 && local->exit_func != 0 )
                 {
                     to_change->exit_func = local->exit_func;
+                }
+                if ( !to_change->optimized && local->optimized )
+                {
+                    to_change->optimized = true;
                 }
             }
         }
@@ -465,6 +530,13 @@ void on_join( __attribute__((unused)) struct SCOREP_Location*                   
             }
         }
     }
+    pthread_mutex_lock( &thread_ctr_mtx );
+    if( thread_ctr == 0 )
+    {
+        // Single threaded execution, time for filtering.
+        delete_regions( );
+    }
+    pthread_mutex_unlock( &thread_ctr_mtx );
 }
 
 /**
@@ -488,8 +560,9 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
                              SCOREP_RegionHandle                                    region_handle,
                              __attribute__((unused)) uint64_t*                      metric_values )
 {
+    if (printed_warning && !continue_despite) return;
     // Skip the undeletable functions!
-    if( (*get_paradigm_type)( region_handle ) != SCOREP_PARADIGM_COMPILER )
+    if( callbacks->SCOREP_RegionHandle_GetParadigmType( region_handle ) != SCOREP_PARADIGM_COMPILER )
     {
         return;
     }
@@ -506,10 +579,15 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         region_info* region;
         HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
 
+        if (region->optimized)
+            return;
+
         // Check for missing instruction pointer.
         if( !region->enter_func )
         {
-            region->enter_func = get_function_call_ip( enter_func );
+            region->enter_func = get_function_call_ip( enter_func , 1 );
+            if ( region->enter_func == NULL )
+                region->optimized = true;
         }
 
         // If the current region is already deleted, skip this whole thing.
@@ -529,13 +607,18 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
 
         if( info != NULL )
         {
+            if (info->optimized)
+                return;
+
             // Store the last (this) entry for the current thread.
             info->last_enter = timestamp;
 
             // Check for missing instruction pointer.
             if( !info->enter_func )
             {
-                info->enter_func = get_function_call_ip( enter_func );
+                info->enter_func = get_function_call_ip( enter_func , 1 );
+                if ( info->enter_func == NULL )
+                    info->optimized = true;
             }
         }
     }
@@ -557,8 +640,9 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
                             SCOREP_RegionHandle                                     region_handle,
                             __attribute__((unused)) uint64_t*                       metric_values )
 {
+    if (printed_warning && !continue_despite) return;
     // Skip the undeletable functions!
-    if( (*get_paradigm_type)( region_handle ) != SCOREP_PARADIGM_COMPILER )
+    if( callbacks->SCOREP_RegionHandle_GetParadigmType( region_handle ) != SCOREP_PARADIGM_COMPILER )
     {
         return;
     }
@@ -569,12 +653,17 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
         region_info* region;
         HASH_FIND( hh, regions, &region_handle, sizeof( uint32_t ), region );
 
+        if (region->optimized)
+            return;
+
         region->depth--;
 
         // Check for missing instruction pointer.
         if( !region->exit_func )
         {
-            region->exit_func = get_function_call_ip( exit_func );
+            region->exit_func = get_function_call_ip( exit_func , 0 );
+            if ( region->exit_func == NULL )
+                region->optimized = true;
         }
 
         // If the region already has been deleted or marked as deletable, skip the next steps.
@@ -634,6 +723,8 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 
         if( info != NULL )
         {
+            if (info->optimized)
+                return;
             // Region not (yet) ready for deletion so update the metrics.
             info->call_cnt++;
             info->duration += ( timestamp - info->last_enter );
@@ -641,7 +732,9 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
             // Check for missing instruction pointer.
             if( !info->exit_func )
             {
-                info->exit_func = get_function_call_ip( exit_func );
+                info->exit_func = get_function_call_ip( exit_func , 0 );
+                if ( info->exit_func == NULL )
+                    info->optimized = true;
             }
         }
     }
@@ -658,10 +751,11 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
 static void on_define_region( SCOREP_AnyHandle                                      handle,
                               SCOREP_HandleType                                     type )
 {
+    if (printed_warning && !continue_despite) return;
     // This plugin can only handle compiler instrumentation, so we can safely ignore all other
     // regions.
     if( type != SCOREP_HANDLE_TYPE_REGION
-        || (*get_paradigm_type)( handle ) != SCOREP_PARADIGM_COMPILER )
+        || callbacks->SCOREP_RegionHandle_GetParadigmType( handle ) != SCOREP_PARADIGM_COMPILER )
     {
         return;
     }
@@ -672,7 +766,7 @@ static void on_define_region( SCOREP_AnyHandle                                  
     HASH_FIND( hh, regions, &handle, sizeof( uint32_t ), new );
     if( new == NULL )
     {
-        const char* region_name = (*get_region_name)( handle );
+        const char* region_name = callbacks->SCOREP_RegionHandle_GetName( handle );
 
         new = calloc( 1, sizeof( region_info ) );
         new->region_handle = handle;
@@ -699,7 +793,8 @@ static void on_define_region( SCOREP_AnyHandle                                  
 void on_create_location( const struct SCOREP_Location*                                    location,
                          __attribute__((unused)) const struct SCOREP_Location*            parent_location )
 {
-    if( (*get_location_id)( location ) == 0 )
+    if (printed_warning && !continue_despite) return;
+    if( callbacks->SCOREP_Location_GetId( location ) == 0 )
     {
         // Mark the main thread as the main thread.
         main_thread = true;
@@ -744,6 +839,7 @@ void on_create_location( const struct SCOREP_Location*                          
  */
 void on_delete_location( __attribute__((unused)) const struct SCOREP_Location*            location )
 {
+    if (printed_warning && !continue_despite) return;
     if( local_info_array_index < MAX_THREAD_CNT )
     {
         local_region_info *current, *tmp;
@@ -770,36 +866,57 @@ void on_delete_location( __attribute__((unused)) const struct SCOREP_Location*  
 static int init( void )
 {
     // Get the threshold for filtering.
-    char* env_str = getenv( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD" );
-    if( env_str == NULL )
+    char* env_str = getenv( "SCOREP_SUBSTRATE_DYNAMIC_FILTERING_THRESHOLD" );
+    if( env_str != NULL )
     {
-        fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD.\n" );
-        exit( EXIT_FAILURE );
-    }
-
-    threshold = strtoull( env_str, NULL, 10 );
-    if( threshold == 0 )
-    {
-        fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_THRESHOLD or set "
-                         "to 0.\n" );
-        exit( EXIT_FAILURE );
+        threshold = strtoull( env_str, NULL, 10 );
+        if( threshold == 0 )
+        {
+            fprintf( stderr, "Unable to parse SCOREP_SUBSTRATE_DYNAMIC_FILTERING_THRESHOLD or set "
+                             "to 0.\n" );
+            exit( EXIT_FAILURE );
+        }
     }
 
     // Get the wanted filtering method.
-    env_str = getenv( "SCOREP_SUBSTRATES_DYNAMIC_FILTERING_METHOD" );
-    if( env_str == NULL )
+    env_str = getenv( "SCOREP_SUBSTRATE_DYNAMIC_FILTERING_METHOD" );
+    if( env_str != NULL )
     {
-        fprintf( stderr, "Unable to parse SCOREP_SUBSTRATES_DYNAMIC_FILTERING_METHOD.\n" );
-        exit( EXIT_FAILURE );
+        if( strcmp( env_str, "absolute" ) != 0 )
+        {
+            filtering_absolute = true;
+        }
+        filtering_absolute = false;
     }
 
-    if( strcmp( env_str, "absolute" ) == 0 )
+    // Get the wanted filtering method.
+    env_str = getenv( "SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CONTINUE_DESPITE_FAILURE" );
+    if( env_str != NULL )
     {
-        filtering_absolute = true;
+        if( strcmp( env_str, "true" ) == 0 || strcmp( env_str, "True" ) == 0 || strcmp( env_str, "TRUE" ) == 0 || strcmp( env_str, "1" ) == 0 )
+        {
+            continue_despite = true;
+        }
     }
-    else
+
+    // Get the wanted filtering method.
+    env_str = getenv( "SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CREATE_REPORT" );
+    if( env_str != NULL )
     {
-        filtering_absolute = false;
+        if( strcmp( env_str, "true" ) == 0 || strcmp( env_str, "True" ) == 0 || strcmp( env_str, "TRUE" ) == 0 || strcmp( env_str, "1" ) == 0 )
+        {
+            create_report = true;
+        }
+    }
+
+    // Get the wanted filtering method.
+    env_str = getenv( "SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CREATE_FILTER_FILE" );
+    if( env_str != NULL )
+    {
+        if( strcmp( env_str, "true" ) == 0 || strcmp( env_str, "True" ) == 0 || strcmp( env_str, "TRUE" ) == 0 || strcmp( env_str, "1" ) == 0 )
+        {
+            create_filter = true;
+        }
     }
 
     return 0;
@@ -817,7 +934,6 @@ static void assign( size_t                                                      
     id = s_id;
 }
 
-#ifdef DYNAMIC_FILTERING_DEBUG
 /**
  * Debug output at the end of the program.
  *
@@ -825,28 +941,80 @@ static void assign( size_t                                                      
  */
 static void on_write_data( void )
 {
-    fprintf( stderr, "\n\nFinalizing.\n\n\n" );
-    fprintf( stderr, "Global mean duration: %f\n\n", mean_duration );
-    fprintf( stderr, "|                  Region Name                  "
-                     "| Region handle "
-                     "| Call count "
-                     "|        Duration        "
-                     "|   Mean duration  "
-                     "|   Status  |\n" );
-    region_info *current, *tmp;
-
-    HASH_ITER( hh, regions, current, tmp )
+    if ( create_report )
     {
-        fprintf( stderr, "| %-45s | %13d | %10lu | %22lu | %16f | %-9s |\n",
-                    current->region_name,
-                    current->region_handle,
-                    current->call_cnt,
-                    current->duration,
-                    current->mean_duration,
-                    current->deletable ? ( current->inactive ? "deleted" : "deletable" ) : " " );
+        fprintf( stderr, "\n\nFinalizing.\n\n\n" );
+        fprintf( stderr, "Global mean duration: %f\n\n", mean_duration );
+        fprintf( stderr, "|                  Region Name                  "
+                         "| Region handle "
+                         "| Call count "
+                         "|        Duration        "
+                         "|   Mean duration  "
+                         "|       Status       |\n" );
+        region_info *current, *tmp;
+
+        HASH_ITER( hh, regions, current, tmp )
+        {
+            fprintf( stderr, "| %-45s | %13d | %10lu | %22lu | %16.2f | %-18s |\n",
+                        current->region_name,
+                        current->region_handle,
+                        current->call_cnt,
+                        current->duration,
+                        current->mean_duration,
+                        current->optimized ? "compiler-optimized" : current->deletable ? ( current->inactive ? "deleted" : "deletable" ) : " " );
+        }
+    }
+    if ( create_filter )
+    {
+        char filename[1024], backup[1024];
+        sprintf( filename, "%s/df-filter.list.%d", callbacks->SCOREP_GetExperimentDirName(), getpid() );
+        printf("%s\n",filename);
+        sprintf( backup, "%s.old", filename );
+
+        int fd = open( filename, O_CREAT | O_WRONLY | O_EXCL, S_IRUSR | S_IWUSR );
+        if( fd < 0 && errno == EEXIST )
+        {
+            // File could not be created because it already exists. Let's move it as a backup.
+            rename( filename, backup );
+            fd = open( filename, O_CREAT | O_WRONLY | O_EXCL, S_IRUSR | S_IWUSR );
+        }
+
+        if( fd > 0 )
+        {
+            // File could be created. Write a Score-P filter file to it.
+            FILE* fp = fdopen( fd, "w" );
+
+            fprintf( fp, "SCOREP_REGION_NAMES_BEGIN\n" );
+
+            region_info *current, *tmp;
+            bool first = true;
+
+            HASH_ITER( hh, regions, current, tmp )
+            {
+                if( current->inactive || current->optimized )
+                {
+                    if( first )
+                    {
+                        fprintf( fp, "EXCLUDE %s\n", current->region_name );
+                        first = false;
+                    }
+                    else
+                    {
+                        fprintf( fp, "        %s\n", current->region_name );
+                    }
+                }
+            }
+
+            fprintf( fp, "SCOREP_REGION_NAMES_END\n" );
+            fclose( fp );
+        }
+        else
+        {
+            // File still could not be created. Dump an error message.
+            fprintf( stderr, "Couldn't create filter list.\n" );
+        }
     }
 }
-#endif
 
 /**
  * Finalizing method.
@@ -855,68 +1023,30 @@ static void on_write_data( void )
  */
 static void finalize( void )
 {
-    char filename[128], backup[128];
-    sprintf( filename, "df-filter.list.%d", getpid( ) );
-    sprintf( backup, "%s.old", filename );
 
-    int fd = open( filename, O_CREAT | O_WRONLY | O_EXCL, S_IRUSR | S_IWUSR );
-    if( fd < 0 && errno == EEXIST )
+    region_info *current, *tmp;
+
+    HASH_ITER( hh, regions, current, tmp )
     {
-        // File could not be created because it already exists. Let's move it as a backup.
-        rename( filename, backup );
-        fd = open( filename, O_CREAT | O_WRONLY | O_EXCL, S_IRUSR | S_IWUSR );
+        HASH_DEL( regions, current );
+        free( current );
     }
 
-    if( fd > 0 )
-    {
-        // File could be created. Write a Score-P filter file to it.
-        FILE* fp = fdopen( fd, "w" );
+    regions = NULL;
+}
 
-        fprintf( fp, "SCOREP_REGION_NAMES_BEGIN\n" );
 
-        region_info *current, *tmp;
-        bool first = true;
 
-        HASH_ITER( hh, regions, current, tmp )
-        {
-            if( current->inactive )
-            {
-                if( first )
-                {
-                    fprintf( fp, "EXCLUDE %s\n", current->region_name );
-                    first = false;
-                }
-                else
-                {
-                    fprintf( fp, "        %s\n", current->region_name );
-                }
-            }
-
-            HASH_DEL( regions, current );
-            free( current );
-        }
-
-        regions = NULL;
-
-        fprintf( fp, "SCOREP_REGION_NAMES_END\n" );
-        fclose( fp );
-    }
-    else
-    {
-        // File still could not be created. Dump an error message.
-        fprintf( stderr, "Couldn't create filter list. Please check if you have write "
-                         "permissions for the current working directory.\n" );
-
-        region_info *current, *tmp;
-
-        HASH_ITER( hh, regions, current, tmp )
-        {
-            HASH_DEL( regions, current );
-            free( current );
-        }
-
-        regions = NULL;
-    }
+/* we need the output folder, therefore we tell Score-P about it */
+static int64_t get_requirement( SCOREP_Substrates_RequirementFlag flag )
+{
+  switch ( flag )
+  {
+      case SCOREP_SUBSTRATES_REQUIREMENT_EXPERIMENT_DIRECTORY:
+          return 1;
+      default:
+          return 0;
+  }
 }
 
 /**
@@ -952,14 +1082,11 @@ static uint32_t event_functions( __attribute__((unused)) SCOREP_Substrates_Mode 
  * @param   size                            The size of the struct containing the callbacks.
  *                                          (unused)
  */
-static void set_callbacks (   const SCOREP_SubstratePluginCallbacks*                         callbacks,
+static void set_callbacks (   const SCOREP_SubstratePluginCallbacks*          incoming_callbacks,
                               __attribute__((unused)) size_t                                 size )
 {
     assert( sizeof( SCOREP_SubstratePluginCallbacks ) <= size );
-
-    get_region_name         = callbacks->SCOREP_RegionHandle_GetName;
-    get_paradigm_type       = callbacks->SCOREP_RegionHandle_GetParadigmType;
-    get_location_id         = callbacks->SCOREP_Location_GetId;
+    callbacks = incoming_callbacks;
 }
 
 /**
@@ -967,7 +1094,7 @@ static void set_callbacks (   const SCOREP_SubstratePluginCallbacks*            
  *
  * Sets management callbacks as well as the standard plugin version.
  */
-SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering_plugin )
+SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering )
 {
     SCOREP_SubstratePluginInfo info;
     memset( &info, 0, sizeof( SCOREP_SubstratePluginInfo ) );
@@ -978,11 +1105,10 @@ SCOREP_SUBSTRATE_PLUGIN_ENTRY( dynamic_filtering_plugin )
     info.new_definition_handle  = on_define_region;
     info.create_location        = on_create_location;
     info.delete_location        = on_delete_location;
-#ifdef DYNAMIC_FILTERING_DEBUG
     info.write_data             = on_write_data;
-#endif
     info.get_event_functions    = event_functions;
     info.set_callbacks          = set_callbacks;
+    info.get_requirement       = get_requirement;
 
     info.plugin_version         = SCOREP_SUBSTRATE_PLUGIN_VERSION;
 
