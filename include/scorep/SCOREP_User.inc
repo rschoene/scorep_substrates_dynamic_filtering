@@ -30,10 +30,10 @@
 !  directory for details.
 !
 
-!> @file       SCOREP_User.inc
+!> @file
 !! @ingroup    SCOREP_User_Interface
 !!
-!! @brief User interface for manual instrumantation of Fortran files.
+!! @brief User interface for manual instrumentation of Fortran files.
 !<
 
 #ifdef SCOREP_USER_ENABLE

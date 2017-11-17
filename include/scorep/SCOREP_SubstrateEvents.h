@@ -57,7 +57,6 @@ typedef enum SCOREP_Substrates_Mode
     SCOREP_SUBSTRATES_NUM_MODES              /**< Non-ABI */
 } SCOREP_Substrates_Mode;
 
-
 /**
  * \enum SCOREP_Substrates_EventType
  * \brief Substrate events. Lists every event that is going to be used by the substrate mechanism. More details can be found in the respective functions.
@@ -126,6 +125,7 @@ typedef enum SCOREP_Substrates_EventType
     SCOREP_EVENT_TRACK_ALLOC,                   /**< track malloc/calloc memory allocation, see SCOREP_Substrates_TrackAllocCb() */
     SCOREP_EVENT_TRACK_REALLOC,                 /**< track realloc memory (de-)allocation, see SCOREP_Substrates_TrackReallocCb() */
     SCOREP_EVENT_TRACK_FREE,                    /**< track realloc memory deallocation, see SCOREP_Substrates_TrackFreeCb() */
+    SCOREP_EVENT_WRITE_METRIC_BEFORE_EVENT,     /**< write asynchronous and synchronous metrics before every enter/exit/sample. This includes calling context events.*/
 
     SCOREP_SUBSTRATES_NUM_EVENTS                /**< Non-ABI, marks the end of the currently supported events and can change with different versions of Score-P (increases with increasing Score-P version) */
 } SCOREP_Substrates_EventType;
@@ -1377,5 +1377,22 @@ typedef void ( * SCOREP_Substrates_TrackFreeCb )(
     size_t                  bytesAllocatedProcess );
 
 
+/**
+ * Records metrics before every ENTER_REGION, EXIT_REGION, SAMPLE, CALLING_CONTEXT_ENTER and CALLING_CONTEXT_EXIT.
+ * First, strictly synchronous metrics are written, afterwards the synchronous ones, and finally SCOREP_METRIC_ASYNC_EVENT ones.
+ * At the end of the measurement SCOREP_METRIC_ASYNC metrics are written.
+ *
+ * @param location                 A pointer to the thread location data of the thread that executed
+ *                                 the metric event.
+ * @param timestamp                The timestamp, when the metric event occurred.
+ * @param SCOREP_SamplingSetHandle The sampling set with metrics
+ * @param metricValues             Array of the metric values.
+ *
+ */
+typedef void ( * SCOREP_Substrates_WriteMetricBeforeEventCb )(
+    struct SCOREP_Location*  location,
+    uint64_t                 timestamp,
+    SCOREP_SamplingSetHandle samplingSet,
+    const uint64_t*          metricValues );
 
 #endif /* SCOREP_SUBSTRATE_EVENTS_H */

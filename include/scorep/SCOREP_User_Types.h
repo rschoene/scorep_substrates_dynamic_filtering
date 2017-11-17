@@ -32,7 +32,7 @@
 #define SCOREP_USER_TYPES_H
 
 /**
-   @file       SCOREP_User_Types.h
+   @file
    @ingroup    SCOREP_User
    @brief      This file contains type definitions for manual user instrumentation.
  */

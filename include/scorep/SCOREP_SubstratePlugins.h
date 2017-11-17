@@ -168,7 +168,8 @@ typedef struct SCOREP_SubstratePluginCallbacks
      * This should be used to write debug/performance data and is available at and after init_mpp is called.
      * Data should be placed under SCOREP_GetExperimentDirName()/(plugin-name)/.
      * Per location data should be placed under SCOREP_GetExperimentDirName()/(plugin-name)/(prefix)(SCOREP_Location_GetGlobalId(location))(suffix).
-     *
+     * If you want to use the experiment directory, you have to set the SCOREP_SUBSTRATES_REQUIREMENT_EXPERIMENT_DIRECTORY flag in the requirements, see SCOREP_SubstratePluginInfo.get_requirement
+     * The name is temporary and the directory might be renamed in the finalization stage.
      */
     const char* ( *SCOREP_GetExperimentDirName )( void );
 
@@ -712,13 +713,14 @@ typedef struct SCOREP_SubstratePluginCallbacks
  *   -# resolving of SCOREP_SUBSTRATE_PLUGIN_ENTRY, e.g., for SCOREP_SUBSTRATE_PLUGINS=foo check whether there is a library called libscorep_substrate_foo.so that provides a SCOREP_SUBSTRATE_PLUGIN_ENTRY(foo) / holds the function SCOREP_SubstratePlugin_foo_get_info
  *   -# init()
  *   -# set_callbacks()
- *   -# get_event_functions() with mode == SCOREP_SUBSTRATES_RECORDING_ENABLED
+ *   -# get_event_functions( ) with mode == SCOREP_SUBSTRATES_RECORDING_ENABLED
  *   -# get_event_functions( ) with mode == SCOREP_SUBSTRATES_RECORDING_DISABLED
  *   -# From now on at any point in time there can be new definitions created via new_definition_handle().
  *      Definitions are unique in a process context. Thus, two different locations within a process
  *      can use the same definitions and there are no handles that are only
  *      valid for a specific location. Plugins should care for thread safeness
  *      when registering handles in internal data structures.
+ *   -# From now on at any point in time there can be calls to get_requirement( )
  *   -# (...Score-P initialization part 2...)
  *   -# assign_id()
  *   -# create_location() for the main thread
@@ -902,6 +904,17 @@ typedef struct SCOREP_SubstratePluginInfo
      */
     void ( * set_callbacks )( const SCOREP_SubstratePluginCallbacks* callbacks,
                               size_t                                 size );
+
+    /**
+     * Provide Score-P with additional information about requirements, see SCOREP_SubstratesRequirementFlag for details.
+     * If this function is not implemented, the default is assumed (0).
+     * This can be called at any time by any thread depending on the flag that is queried.
+     * Plugins must take care that they return 0 if flag is greater than SCOREP_SUBSTRATES_NUM_REQUIREMENT
+     * Plugins must always return the same value for a given flag during one execution.
+     * @param flag the requirement flag that is queried
+     * @return the setting for the requirement flag, which highly depends on the type of flag
+     */
+    int64_t ( * get_requirement )( SCOREP_Substrates_RequirementFlag flag );
 
     /**
      *  for future extensions

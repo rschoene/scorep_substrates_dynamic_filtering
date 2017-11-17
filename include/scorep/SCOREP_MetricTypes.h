@@ -29,7 +29,7 @@
  */
 
 /**
- * @file       SCOREP_MetricTypes.h
+ * @file
  *
  * @brief Types used by metric service.
  */
@@ -173,7 +173,7 @@ typedef enum SCOREP_MetricBase
 } SCOREP_MetricBase;
 
 /**
- * Properties desribing a metric.
+ * Properties describing a metric.
  *
  */
 typedef struct SCOREP_Metric_Properties

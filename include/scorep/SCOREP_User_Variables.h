@@ -32,7 +32,7 @@
 #define SCOREP_USER_VARIABLES_H
 
 /**
-    @file       SCOREP_User_Variables.h
+    @file
     @ingroup    SCOREP_User_External
 
     @brief Automatically, declares variables needed in the application's source files.
@@ -40,7 +40,7 @@
     This file contains variable declarations. This declarations are automatically
     included in any file that includes the User adapter interface @ref SCOREP_User.h.
     Thus, these variables are declared in every file that uses the user interface.
-    Becuase static variables are only visible inside the source file where there are
+    Because static variables are only visible inside the source file where there are
     declared, it is possible to have source file specific variables. This is
     used to store and distinguish the source file related date from the Score-P
     measurement system and access them efficiently.

@@ -32,7 +32,7 @@
 #define SCOREP_USER_FUNCTIONS_H
 
 /**
-    @file       SCOREP_User_Functions.h
+    @file
     @ingroup    SCOREP_User_External
 
     This File contains the function definitions which are called from the user manual
@@ -53,7 +53,7 @@ extern "C" {
 #endif /* __cplusplus */
 
 /**
-    @defgroup SCOREP_User_External External visisble functions of the Score-P user adapter
+    @defgroup SCOREP_User_External External visible functions of the Score-P user adapter
     @ingroup SCOREP_User
 
     This module contains all external visible items of the user adapter except the
@@ -236,7 +236,7 @@ SCOREP_User_RewindRegionBegin( SCOREP_User_RegionHandle*    handle,
     description refer to SCOREP_User_RegionEnd.
     @param handle     The handle for this region. It must be defined before.
     @param value      Boolean value, whether there should be an rewind to a
-                      prevous saved tracce buffer state.
+                      previous saved trace buffer state.
  */
 void
 SCOREP_User_RewindRegionEnd( const SCOREP_User_RegionHandle handle,
@@ -278,7 +278,7 @@ SCOREP_User_OaPhaseEnd( const SCOREP_User_RegionHandle handle );
     but use the SCOREP_USER_PARAMETER_INT64 macro instead.
     @param handle Pointer where the parameter handle is stored. If it is
                   SCOREP_USER_INVALID_PARAMETER, the parameter will be registered.
-    @param name  The unique name for the paramater.
+    @param name  The unique name for the parameter.
     @param value The value for the parameter.
  */
 void
@@ -292,7 +292,7 @@ SCOREP_User_ParameterInt64( SCOREP_User_ParameterHandle* handle,
     but use the SCOREP_USER_PARAMETER_UINT64 macro instead.
     @param handle Pointer where the parameter handle is stored. If it is
                   SCOREP_USER_INVALID_PARAMETER, the parameter will be registered.
-    @param name  The unique name for the paramater.
+    @param name  The unique name for the parameter.
     @param value The value for the parameter.
  */
 void
@@ -306,7 +306,7 @@ SCOREP_User_ParameterUint64( SCOREP_User_ParameterHandle* handle,
     but use the SCOREP_USER_PARAMETER_STRING macro instead.
     @param handle Pointer where the parameter handle is stored. If it is
                   SCOREP_USER_INVALID_PARAMETER, the parameter will be registered.
-    @param name  The unique name for the paramater.
+    @param name  The unique name for the parameter.
     @param value The value for the parameter.
  */
 void
@@ -415,7 +415,7 @@ SCOREP_User_RecordingEnabled( void );
     @class SCOREP_User_RegionClass
     This class implements the SCOREP_USER_REGION statement. Its constructor and destructor
     generates the enter and respectively the exit event for the instrumented function.
-    @note We strongly recommend not to instatiate this class directly, or insert
+    @note We strongly recommend not to instantiate this class directly, or insert
     commands which contains this class for instrumentation directly,
     but use the SCOREP_USER_REGION macro instead.
  */

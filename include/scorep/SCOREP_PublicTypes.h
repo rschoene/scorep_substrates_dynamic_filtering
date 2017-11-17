@@ -332,8 +332,8 @@ typedef enum SCOREP_ParameterType
 
 
 /**
- * \enum SCOREP_RmaAtomicType
- * \brief specifies a RMA Atomic Operation Type.
+ * \enum SCOREP_RegionType
+ * \brief specifies a Region
  *
  * Types to be used in defining a region (SCOREP_Definitions_NewRegion()). These types
  * are currently not used inside the measurement system. This @e may change in
@@ -639,9 +639,6 @@ typedef enum SCOREP_Ipc_Datatype
  * - SCOREP_IPC_SUM sum
  */
 
-/*
- * Operations for reduce functions of IPC
- */
 #define SCOREP_IPC_OPERATIONS \
     SCOREP_IPC_OPERATION( BAND ) \
     SCOREP_IPC_OPERATION( BOR ) \
@@ -657,6 +654,23 @@ typedef enum SCOREP_Ipc_Operation
 #undef SCOREP_IPC_OPERATION
     SCOREP_IPC_NUMBER_OF_OPERATIONS
 } SCOREP_Ipc_Operation;
+
+
+/**
+ * \enum SCOREP_SubstratesRequirementFlags
+ * \brief Substrates can define requirements for Score-P. This enables some optimizations.
+ * Substrate Plugins pass it to Score-P via SCOREP_SubstratePluginInfo.get_requirement()
+ * Internal Plugins pass it to Score-P via SCOREP_Substrates_getRequirement()
+ * If this SCOREP_SubstratePluginInfo.get_requirements is not implemented, it is assumed that all values are 0.
+ * A description is provided with each of the requirement flags.
+ * New requirement flags can be added by just stating them in SCOREP_SubstratesRequirementFlag.
+ */
+typedef enum SCOREP_Substrates_RequirementFlag
+{
+    SCOREP_SUBSTRATES_REQUIREMENT_EXPERIMENT_DIRECTORY = 0, /**< Set this to != 0 if you need the experiment directory. If no substrate uses this option, the experiment directory will not be created and no configuration file will be written.*/
+
+    SCOREP_SUBSTRATES_NUM_REQUIREMENT                       /**< Non-ABI used internally  */
+} SCOREP_Substrates_RequirementFlag;
 
 /** @} */
 

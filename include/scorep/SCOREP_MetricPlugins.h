@@ -29,7 +29,7 @@
  */
 
 /**
- * @file       SCOREP_MetricPlugins.h
+ * @file
  *
  * @brief Description of the metric plugin header.
  *        For information on how to use metric plugins, please refer to @secref{metric_plugins}.
