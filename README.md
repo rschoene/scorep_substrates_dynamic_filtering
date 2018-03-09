@@ -70,7 +70,7 @@ To compile this plugin, you need:
 In order to use this plugin, you have to add it to the `SCOREP_SUBSTRATES_PLUGINS` environment
 variable.
 
-    export SCOREP_SUBSTRATE_PLUGINS="dynamic_filtering_plugin"
+    export SCOREP_SUBSTRATE_PLUGINS="dynamic_filtering"
 
 The configuration of the plugin is done via environment variables.
 
