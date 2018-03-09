@@ -14,6 +14,8 @@
 #include <unistd.h>
 #include <assert.h>
 
+#include <dlfcn.h>
+
 #include <scorep/SCOREP_SubstratePlugins.h>
 
 /**
@@ -324,8 +326,8 @@ static char* get_function_call_ip( const char*                                  
                 function_exit_address = (char *) pip.start_ip;
             }
         }
-
         unw_get_reg( &cursor, UNW_REG_IP, &ip );
+
         if( found && strcmp( sym, function_name ) != 0 )
         {
             // UNW_REG_IP is the first byte _after_ the callq so we need to step back 5 bytes.
@@ -341,6 +343,18 @@ static char* get_function_call_ip( const char*                                  
                         ( (char *) ( ip + DISPLACEMENT(assumed) ) != function_exit_address ) )
 
                 {
+                    /* Fallback: plt/gob????*/
+                    /* get assembly from address*/
+                    unsigned char * assumed_plt = (unsigned char*) ip + DISPLACEMENT(assumed);
+                    if ( ((assumed_plt[0] & 0xff) == 0xff) && ((assumed_plt[1] & 0xff) == 0x25) )
+                    {
+                        void * jmp_adr = (void*) (((long long)assumed_plt[5] << 24) +((long long)assumed_plt[4] << 16) + ((long long)assumed_plt[3] << 8) + ((long long)assumed_plt[2] ));
+                        void** real_target=(void**)(assumed_plt+(unsigned long long)jmp_adr+6);
+                        if (*real_target == (void*) function_exit_address )
+                        {
+                           return (char*) assumed;
+                        }
+                    }
                     if ( !printed_warning )
                     {
                         fprintf(stderr,"Your program uses (partially) call optimizations, for example \"-foptimize-sibling-calls\". This flag might be included in -O2 and -O3. Try to add the compiler flag \"-fno-optimize-sibling-calls\", which could help this plugin to work.\n");
