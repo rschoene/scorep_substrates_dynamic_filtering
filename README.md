@@ -125,4 +125,3 @@ the license of `uthash` see
 
 * Philipp Trommler (https://github.com/Ferruck)
 * Robert Schoene (robert dot schoene at tu-dresden dot de)
-
