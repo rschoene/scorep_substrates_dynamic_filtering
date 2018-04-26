@@ -1,11 +1,14 @@
 /*
  * This file is part of the Score-P software (http://www.score-p.org)
  *
- * Copyright (c) 2016,
+ * Copyright (c) 2016-2018,
  * Technische Universitaet Dresden, Germany
  *
  * Copyright (c) 2015-2016,
  * Technische Universitaet Muenchen, Germany
+ *
+ * Copyright (c) 2018,
+ * Forschungszentrum Juelich GmbH, Germany
  *
  * This software may be modified and distributed under the terms of
  * a BSD-style license.  See the COPYING file in the package base
@@ -15,7 +18,7 @@
 
 
 /**
- * @file       SCOREP_SubstrateEvents.h
+ * @file
  *
  * @brief Description of the substrate plugin events header.
  *        For information on how to use substrate plugins, please refer to section @secref{substrate_plugins}.
@@ -63,71 +66,71 @@ typedef enum SCOREP_Substrates_Mode
  */
 typedef enum SCOREP_Substrates_EventType
 {
-    SCOREP_EVENT_ENABLE_RECORDING = 0,          /**< enable recording of events, see SCOREP_Substrates_EnableRecordingCb() */
-    SCOREP_EVENT_DISABLE_RECORDING,             /**< disable recording of events, see SCOREP_Substrates_DisableRecordingCb() */
-    SCOREP_EVENT_ON_TRACING_BUFFER_FLUSH_BEGIN, /**< start flushing trace buffer to disk, see SCOREP_Substrates_OnTracingBufferFlushBeginCb() */
-    SCOREP_EVENT_ON_TRACING_BUFFER_FLUSH_END,   /**< end flushing trace buffer to disk, see SCOREP_Substrates_OnTracingBufferFlushEndCb() */
-    SCOREP_EVENT_ENTER_REGION,                  /**< enter an instrumented region, see SCOREP_Substrates_EnterRegionCb() */
-    SCOREP_EVENT_EXIT_REGION,                   /**< exit an instrumented region, see SCOREP_Substrates_ExitRegionCb() */
-    SCOREP_EVENT_SAMPLE,                        /**< record a calling context from sampling, see SCOREP_Substrates_SampleCb() */
-    SCOREP_EVENT_CALLING_CONTEXT_ENTER,         /**< enter an instrumented region with calling context information, replaces SCOREP_EVENT_ENTER_REGION when unwinding is enabled, see SCOREP_Substrates_CallingContextEnterCb() */
-    SCOREP_EVENT_CALLING_CONTEXT_EXIT,          /**< exit an instrumented region with calling context information, replaces SCOREP_EVENT_EXIT_REGION when unwinding is enabled, see SCOREP_Substrates_CallingContextExitCb() */
-    SCOREP_EVENT_ENTER_REWIND_REGION,           /**< enter rewinding, see SCOREP_Substrates_EnterRewindRegionCb() */
-    SCOREP_EVENT_EXIT_REWIND_REGION,            /**< exit rewinding, see SCOREP_Substrates_ExitRewindRegionCb() */
-    SCOREP_EVENT_MPI_SEND,                      /**< MPI_Send, see SCOREP_Substrates_MpiSendCb() */
-    SCOREP_EVENT_MPI_RECV,                      /**< MPI_Recv, see SCOREP_Substrates_MpiRecvCb() */
-    SCOREP_EVENT_MPI_COLLECTIVE_BEGIN,          /**< starts an MPI collective, see SCOREP_Substrates_MpiCollectiveBeginCb() */
-    SCOREP_EVENT_MPI_COLLECTIVE_END,            /**< ends an MPI collective, see SCOREP_Substrates_MpiCollectiveEndCb() */
-    SCOREP_EVENT_MPI_ISEND_COMPLETE,            /**< marks the completion of an MPI_Isend, see SCOREP_Substrates_MpiIsendCompleteCb() */
-    SCOREP_EVENT_MPI_IRECV_REQUEST,             /**< marks the request for an MPI_Irecv, see SCOREP_Substrates_MpiIrecvRequestCb() */
-    SCOREP_EVENT_MPI_REQUEST_TESTED,            /**< marks the test of an MPI request (e.g., in an MPI_Waitsome(...) ), see SCOREP_Substrates_MpiRequestTestedCb() */
-    SCOREP_EVENT_MPI_REQUEST_CANCELLED,         /**< marks the cancellation of an MPI request (e.g., an MPI_Test_cancelled(...) call that returned true in its second parameter), see SCOREP_Substrates_MpiRequestCancelledCb() */
-    SCOREP_EVENT_MPI_ISEND,                     /**< marks the start of an MPI_ISend, see SCOREP_Substrates_MpiIsendCb() */
-    SCOREP_EVENT_MPI_IRECV,                     /**< marks the start of an MPI_IRecv, see SCOREP_Substrates_MpiIrecvCb() */
-    SCOREP_EVENT_RMA_WIN_CREATE,                /**< marks the creation of an RMA window (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaWinCreateCb() */
-    SCOREP_EVENT_RMA_WIN_DESTROY,               /**< marks the destruction of an RMA window (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaWinDestroyCb() */
-    SCOREP_EVENT_RMA_COLLECTIVE_BEGIN,          /**< marks the start of an RMA collective (used by shmem), see SCOREP_Substrates_RmaCollectiveBeginCb() */
-    SCOREP_EVENT_RMA_COLLECTIVE_END,            /**< marks the start of an RMA collective (used by shmem), see SCOREP_Substrates_RmaCollectiveEndCb() */
-    SCOREP_EVENT_RMA_TRY_LOCK,                  /**< marks an RMA trylock (used by shmem), see SCOREP_Substrates_RmaTryLockCb() */
-    SCOREP_EVENT_RMA_ACQUIRE_LOCK,              /**< marks the acquiration of an RMA lock (used by shmem), see SCOREP_Substrates_RmaAcquireLockCb() */
-    SCOREP_EVENT_RMA_REQUEST_LOCK,              /**< marks a request for an RMA lock (used by shmem), see SCOREP_Substrates_RmaRequestLockCb() */
-    SCOREP_EVENT_RMA_RELEASE_LOCK,              /**< marks a release of an RMA lock (used by shmem), see SCOREP_Substrates_RmaReleaseLockCb() */
-    SCOREP_EVENT_RMA_SYNC,                      /**< marks a simple pairwise RMA synchronization, see SCOREP_Substrates_RmaSyncCb() */
-    SCOREP_EVENT_RMA_GROUP_SYNC,                /**< marks an RMA synchronization of a sub-group of locations on a given window, see SCOREP_Substrates_RmaGroupSyncCb() */
-    SCOREP_EVENT_RMA_PUT,                       /**< marks a put operation to an RMA memory (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaPutCb() */
-    SCOREP_EVENT_RMA_GET,                       /**< marks a get operation from an RMA memory (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaGetCb() */
-    SCOREP_EVENT_RMA_ATOMIC,                    /**< marks an atomic RMA operation (used by shmem), see SCOREP_Substrates_RmaAtomicCb() */
-    SCOREP_EVENT_RMA_WAIT_CHANGE,               /**< marks a blocks until a remote operation modifies a given RMA memory field (used by shmem), see SCOREP_Substrates_RmaWaitChangeCb() */
-    SCOREP_EVENT_RMA_OP_COMPLETE_BLOCKING,      /**< marks completion of a blocking RMA operation (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaOpCompleteBlockingCb() */
-    SCOREP_EVENT_RMA_OP_COMPLETE_NON_BLOCKING,  /**< marks completion of a non-blocking RMA operation, see SCOREP_Substrates_RmaOpCompleteNonBlockingCb() */
-    SCOREP_EVENT_RMA_OP_TEST,                   /**< marks a test for completion of a non-blocking RMA operation, see SCOREP_Substrates_RmaOpTestCb() */
-    SCOREP_EVENT_RMA_OP_COMPLETE_REMOTE,        /**< marks a remote completion point, see SCOREP_Substrates_RmaOpCompleteRemoteCb() */
-    SCOREP_EVENT_THREAD_ACQUIRE_LOCK,           /**< marks when a thread acquires a lock (pthreads, explicit and implicit OpenMP locks), see SCOREP_Substrates_ThreadAcquireLockCb() */
-    SCOREP_EVENT_THREAD_RELEASE_LOCK,           /**< marks when a thread releases a lock (pthreads, explicit and implicit OpenMP locks), see SCOREP_Substrates_ThreadreleaseLockCb() */
-    SCOREP_EVENT_TRIGGER_COUNTER_INT64,         /**< called when an int64 counter is triggered, see SCOREP_Substrates_TriggerCounterInt64Cb() */
-    SCOREP_EVENT_TRIGGER_COUNTER_UINT64,        /**< called when an uint64 counter is triggered, see SCOREP_Substrates_TriggerCounterUint64Cb() */
-    SCOREP_EVENT_TRIGGER_COUNTER_DOUBLE,        /**< called when an double counter is triggered, see SCOREP_Substrates_TriggerCounterDoubleCb() */
-    SCOREP_EVENT_TRIGGER_PARAMETER_INT64,       /**< called when an int64 parameter is triggered, called from user instrumentation, see SCOREP_Substrates_TriggerParameterInt64Cb() */
-    SCOREP_EVENT_TRIGGER_PARAMETER_UINT64,      /**< called when an uint64 parameter is triggered, called from user instrumentation, see SCOREP_Substrates_TriggerParameterUint64Cb() */
-    SCOREP_EVENT_TRIGGER_PARAMETER_STRING,      /**< called when an string parameter is triggered, called from user instrumentation, see SCOREP_Substrates_TriggerParameterStringCb() */
-    SCOREP_EVENT_THREAD_FORK_JOIN_FORK,         /**< called before a fork-join based thread-parallel programming model (e.g., OpenMP) forks its threads logically, see SCOREP_Substrates_ThreadForkJoinForkCb() */
-    SCOREP_EVENT_THREAD_FORK_JOIN_JOIN,         /**< called after a fork-join based thread-parallel programming model (e.g., OpenMP) joins its threads logically, see SCOREP_Substrates_ThreadForkJoinJoinCb() */
-    SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_BEGIN,   /**< begin of a parallel execution on a thread created by either SCOREP_ThreadForkJoin_Fork, is called by all created threads, see SCOREP_Substrates_ThreadForkJoinTeamBeginCb() */
-    SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_END,     /**< end of a parallel execution on a thread created by either SCOREP_ThreadForkJoin_Fork, is called by all created threads, see SCOREP_Substrates_ThreadForkJoinTeamBeginCb() */
-    SCOREP_EVENT_THREAD_FORK_JOIN_TASK_CREATE,  /**< creation of a task in a fork-join based thread-parallel programming model (e.g., OpenMP), see SCOREP_Substrates_ThreadForkJoinTaskCreateCb() */
-    SCOREP_EVENT_THREAD_FORK_JOIN_TASK_SWITCH,  /**< switching of tasks in a fork-join based thread-parallel programming model (e.g., OpenMP), see SCOREP_Substrates_ThreadForkJoinTaskSwitchCb() */
-    SCOREP_EVENT_THREAD_FORK_JOIN_TASK_BEGIN,   /**< begin of a task in a fork-join based thread-parallel programming model (e.g., OpenMP), see SCOREP_Substrates_ThreadForkJoinTaskBeginCb() */
-    SCOREP_EVENT_THREAD_FORK_JOIN_TASK_END,     /**< end of a task in a fork-join based thread-parallel programming model (e.g., OpenMP), see SCOREP_Substrates_ThreadForkJoinTaskEndCb() */
-    SCOREP_EVENT_THREAD_CREATE_WAIT_CREATE,     /**< create a new thread in a create-wait based thread-parallel programming model (e.g., pthreads), called by parent, see SCOREP_Substrates_ThreadCreateWaitCreateCb() */
-    SCOREP_EVENT_THREAD_CREATE_WAIT_WAIT,       /**< wait and join a thread in a create-wait based thread-parallel programming model (e.g., pthreads), usually called by parent, see SCOREP_Substrates_ThreadCreateWaitWaitCb() */
-    SCOREP_EVENT_THREAD_CREATE_WAIT_BEGIN,      /**< begin a new thread in a create-wait based thread-parallel programming model (e.g., pthreads), called by new thread, see SCOREP_Substrates_ThreadCreateWaitBeginCb() */
-    SCOREP_EVENT_THREAD_CREATE_WAIT_END,        /**< end a thread in a create-wait based thread-parallel programming model (e.g., pthreads), see SCOREP_Substrates_ThreadCreateWaitEndCb() */
-    SCOREP_EVENT_TRACK_ALLOC,                   /**< track malloc/calloc memory allocation, see SCOREP_Substrates_TrackAllocCb() */
-    SCOREP_EVENT_TRACK_REALLOC,                 /**< track realloc memory (de-)allocation, see SCOREP_Substrates_TrackReallocCb() */
-    SCOREP_EVENT_TRACK_FREE,                    /**< track realloc memory deallocation, see SCOREP_Substrates_TrackFreeCb() */
-    SCOREP_EVENT_WRITE_METRIC_BEFORE_EVENT,     /**< write asynchronous and synchronous metrics before every enter/exit/sample. This includes calling context events.*/
+    SCOREP_EVENT_ENABLE_RECORDING = 0,            /**< enable recording of events, see SCOREP_Substrates_EnableRecordingCb() */
+    SCOREP_EVENT_DISABLE_RECORDING,               /**< disable recording of events, see SCOREP_Substrates_DisableRecordingCb() */
+    SCOREP_EVENT_ON_TRACING_BUFFER_FLUSH_BEGIN,   /**< start flushing trace buffer to disk, see SCOREP_Substrates_OnTracingBufferFlushBeginCb() */
+    SCOREP_EVENT_ON_TRACING_BUFFER_FLUSH_END,     /**< end flushing trace buffer to disk, see SCOREP_Substrates_OnTracingBufferFlushEndCb() */
+    SCOREP_EVENT_ENTER_REGION,                    /**< enter an instrumented region, see SCOREP_Substrates_EnterRegionCb() */
+    SCOREP_EVENT_EXIT_REGION,                     /**< exit an instrumented region, see SCOREP_Substrates_ExitRegionCb() */
+    SCOREP_EVENT_SAMPLE,                          /**< record a calling context from sampling, see SCOREP_Substrates_SampleCb() */
+    SCOREP_EVENT_CALLING_CONTEXT_ENTER,           /**< enter an instrumented region with calling context information, replaces SCOREP_EVENT_ENTER_REGION when unwinding is enabled, see SCOREP_Substrates_CallingContextEnterCb() */
+    SCOREP_EVENT_CALLING_CONTEXT_EXIT,            /**< exit an instrumented region with calling context information, replaces SCOREP_EVENT_EXIT_REGION when unwinding is enabled, see SCOREP_Substrates_CallingContextExitCb() */
+    SCOREP_EVENT_ENTER_REWIND_REGION,             /**< enter rewinding, see SCOREP_Substrates_EnterRewindRegionCb() */
+    SCOREP_EVENT_EXIT_REWIND_REGION,              /**< exit rewinding, see SCOREP_Substrates_ExitRewindRegionCb() */
+    SCOREP_EVENT_MPI_SEND,                        /**< MPI_Send, see SCOREP_Substrates_MpiSendCb() */
+    SCOREP_EVENT_MPI_RECV,                        /**< MPI_Recv, see SCOREP_Substrates_MpiRecvCb() */
+    SCOREP_EVENT_MPI_COLLECTIVE_BEGIN,            /**< starts an MPI collective, see SCOREP_Substrates_MpiCollectiveBeginCb() */
+    SCOREP_EVENT_MPI_COLLECTIVE_END,              /**< ends an MPI collective, see SCOREP_Substrates_MpiCollectiveEndCb() */
+    SCOREP_EVENT_MPI_ISEND_COMPLETE,              /**< marks the completion of an MPI_Isend, see SCOREP_Substrates_MpiIsendCompleteCb() */
+    SCOREP_EVENT_MPI_IRECV_REQUEST,               /**< marks the request for an MPI_Irecv, see SCOREP_Substrates_MpiIrecvRequestCb() */
+    SCOREP_EVENT_MPI_REQUEST_TESTED,              /**< marks the test of an MPI request (e.g., in an MPI_Waitsome(...) ), see SCOREP_Substrates_MpiRequestTestedCb() */
+    SCOREP_EVENT_MPI_REQUEST_CANCELLED,           /**< marks the cancellation of an MPI request (e.g., an MPI_Test_cancelled(...) call that returned true in its second parameter), see SCOREP_Substrates_MpiRequestCancelledCb() */
+    SCOREP_EVENT_MPI_ISEND,                       /**< marks the start of an MPI_ISend, see SCOREP_Substrates_MpiIsendCb() */
+    SCOREP_EVENT_MPI_IRECV,                       /**< marks the start of an MPI_IRecv, see SCOREP_Substrates_MpiIrecvCb() */
+    SCOREP_EVENT_RMA_WIN_CREATE,                  /**< marks the creation of an RMA window (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaWinCreateCb() */
+    SCOREP_EVENT_RMA_WIN_DESTROY,                 /**< marks the destruction of an RMA window (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaWinDestroyCb() */
+    SCOREP_EVENT_RMA_COLLECTIVE_BEGIN,            /**< marks the start of an RMA collective (used by shmem), see SCOREP_Substrates_RmaCollectiveBeginCb() */
+    SCOREP_EVENT_RMA_COLLECTIVE_END,              /**< marks the start of an RMA collective (used by shmem), see SCOREP_Substrates_RmaCollectiveEndCb() */
+    SCOREP_EVENT_RMA_TRY_LOCK,                    /**< marks an RMA trylock (used by shmem), see SCOREP_Substrates_RmaTryLockCb() */
+    SCOREP_EVENT_RMA_ACQUIRE_LOCK,                /**< marks the acquisition of an RMA lock (used by shmem), see SCOREP_Substrates_RmaAcquireLockCb() */
+    SCOREP_EVENT_RMA_REQUEST_LOCK,                /**< marks a request for an RMA lock (used by shmem), see SCOREP_Substrates_RmaRequestLockCb() */
+    SCOREP_EVENT_RMA_RELEASE_LOCK,                /**< marks a release of an RMA lock (used by shmem), see SCOREP_Substrates_RmaReleaseLockCb() */
+    SCOREP_EVENT_RMA_SYNC,                        /**< marks a simple pairwise RMA synchronization, see SCOREP_Substrates_RmaSyncCb() */
+    SCOREP_EVENT_RMA_GROUP_SYNC,                  /**< marks an RMA synchronization of a sub-group of locations on a given window, see SCOREP_Substrates_RmaGroupSyncCb() */
+    SCOREP_EVENT_RMA_PUT,                         /**< marks a put operation to an RMA memory (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaPutCb() */
+    SCOREP_EVENT_RMA_GET,                         /**< marks a get operation from an RMA memory (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaGetCb() */
+    SCOREP_EVENT_RMA_ATOMIC,                      /**< marks an atomic RMA operation (used by shmem), see SCOREP_Substrates_RmaAtomicCb() */
+    SCOREP_EVENT_RMA_WAIT_CHANGE,                 /**< marks a blocks until a remote operation modifies a given RMA memory field (used by shmem), see SCOREP_Substrates_RmaWaitChangeCb() */
+    SCOREP_EVENT_RMA_OP_COMPLETE_BLOCKING,        /**< marks completion of a blocking RMA operation (used by cuda, opencl, and shmem), see SCOREP_Substrates_RmaOpCompleteBlockingCb() */
+    SCOREP_EVENT_RMA_OP_COMPLETE_NON_BLOCKING,    /**< marks completion of a non-blocking RMA operation, see SCOREP_Substrates_RmaOpCompleteNonBlockingCb() */
+    SCOREP_EVENT_RMA_OP_TEST,                     /**< marks a test for completion of a non-blocking RMA operation, see SCOREP_Substrates_RmaOpTestCb() */
+    SCOREP_EVENT_RMA_OP_COMPLETE_REMOTE,          /**< marks a remote completion point, see SCOREP_Substrates_RmaOpCompleteRemoteCb() */
+    SCOREP_EVENT_THREAD_ACQUIRE_LOCK,             /**< marks when a thread acquires a lock (pthreads, explicit and implicit OpenMP locks), see SCOREP_Substrates_ThreadAcquireLockCb() */
+    SCOREP_EVENT_THREAD_RELEASE_LOCK,             /**< marks when a thread releases a lock (pthreads, explicit and implicit OpenMP locks), see SCOREP_Substrates_ThreadreleaseLockCb() */
+    SCOREP_EVENT_TRIGGER_COUNTER_INT64,           /**< called when an int64 counter is triggered, see SCOREP_Substrates_TriggerCounterInt64Cb() */
+    SCOREP_EVENT_TRIGGER_COUNTER_UINT64,          /**< called when an uint64 counter is triggered, see SCOREP_Substrates_TriggerCounterUint64Cb() */
+    SCOREP_EVENT_TRIGGER_COUNTER_DOUBLE,          /**< called when an double counter is triggered, see SCOREP_Substrates_TriggerCounterDoubleCb() */
+    SCOREP_EVENT_TRIGGER_PARAMETER_INT64,         /**< called when an int64 parameter is triggered, called from user instrumentation, see SCOREP_Substrates_TriggerParameterInt64Cb() */
+    SCOREP_EVENT_TRIGGER_PARAMETER_UINT64,        /**< called when an uint64 parameter is triggered, called from user instrumentation, see SCOREP_Substrates_TriggerParameterUint64Cb() */
+    SCOREP_EVENT_TRIGGER_PARAMETER_STRING,        /**< called when an string parameter is triggered, called from user instrumentation, see SCOREP_Substrates_TriggerParameterStringCb() */
+    SCOREP_EVENT_THREAD_FORK_JOIN_FORK,           /**< called before a fork-join based thread-parallel programming model (e.g., OpenMP) forks its threads logically, see SCOREP_Substrates_ThreadForkJoinForkCb() */
+    SCOREP_EVENT_THREAD_FORK_JOIN_JOIN,           /**< called after a fork-join based thread-parallel programming model (e.g., OpenMP) joins its threads logically, see SCOREP_Substrates_ThreadForkJoinJoinCb() */
+    SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_BEGIN,     /**< begin of a parallel execution on a thread created by either SCOREP_ThreadForkJoin_Fork, is called by all created threads, see SCOREP_Substrates_ThreadForkJoinTeamBeginCb() */
+    SCOREP_EVENT_THREAD_FORK_JOIN_TEAM_END,       /**< end of a parallel execution on a thread created by either SCOREP_ThreadForkJoin_Fork, is called by all created threads, see SCOREP_Substrates_ThreadForkJoinTeamBeginCb() */
+    SCOREP_EVENT_THREAD_FORK_JOIN_TASK_CREATE,    /**< creation of a task in a fork-join based thread-parallel programming model (e.g., OpenMP), see SCOREP_Substrates_ThreadForkJoinTaskCreateCb() */
+    SCOREP_EVENT_THREAD_FORK_JOIN_TASK_SWITCH,    /**< switching of tasks in a fork-join based thread-parallel programming model (e.g., OpenMP), see SCOREP_Substrates_ThreadForkJoinTaskSwitchCb() */
+    SCOREP_EVENT_THREAD_FORK_JOIN_TASK_BEGIN,     /**< begin of a task in a fork-join based thread-parallel programming model (e.g., OpenMP), see SCOREP_Substrates_ThreadForkJoinTaskBeginCb() */
+    SCOREP_EVENT_THREAD_FORK_JOIN_TASK_END,       /**< end of a task in a fork-join based thread-parallel programming model (e.g., OpenMP), see SCOREP_Substrates_ThreadForkJoinTaskEndCb() */
+    SCOREP_EVENT_THREAD_CREATE_WAIT_CREATE,       /**< create a new thread in a create-wait based thread-parallel programming model (e.g., pthreads), called by parent, see SCOREP_Substrates_ThreadCreateWaitCreateCb() */
+    SCOREP_EVENT_THREAD_CREATE_WAIT_WAIT,         /**< wait and join a thread in a create-wait based thread-parallel programming model (e.g., pthreads), usually called by parent, see SCOREP_Substrates_ThreadCreateWaitWaitCb() */
+    SCOREP_EVENT_THREAD_CREATE_WAIT_BEGIN,        /**< begin a new thread in a create-wait based thread-parallel programming model (e.g., pthreads), called by new thread, see SCOREP_Substrates_ThreadCreateWaitBeginCb() */
+    SCOREP_EVENT_THREAD_CREATE_WAIT_END,          /**< end a thread in a create-wait based thread-parallel programming model (e.g., pthreads), see SCOREP_Substrates_ThreadCreateWaitEndCb() */
+    SCOREP_EVENT_TRACK_ALLOC,                     /**< track malloc/calloc memory allocation, see SCOREP_Substrates_TrackAllocCb() */
+    SCOREP_EVENT_TRACK_REALLOC,                   /**< track realloc memory (de-)allocation, see SCOREP_Substrates_TrackReallocCb() */
+    SCOREP_EVENT_TRACK_FREE,                      /**< track realloc memory deallocation, see SCOREP_Substrates_TrackFreeCb() */
+    SCOREP_EVENT_WRITE_POST_MORTEM_METRICS,       /**< write post mortem metrics before unify, see SCOREP_Substrates_WriteMetricsCb() */
 
-    SCOREP_SUBSTRATES_NUM_EVENTS                /**< Non-ABI, marks the end of the currently supported events and can change with different versions of Score-P (increases with increasing Score-P version) */
+    SCOREP_SUBSTRATES_NUM_EVENTS                  /**< Non-ABI, marks the end of the currently supported events and can change with different versions of Score-P (increases with increasing Score-P version) */
 } SCOREP_Substrates_EventType;
 
 
@@ -375,7 +378,7 @@ typedef void ( * SCOREP_Substrates_MpiSendCb )(
  *
  * @param tag provided MPI tag for this message
  *
- * @param bytesSent number of bytes received with this message
+ * @param bytesReceived number of bytes received with this message
  */
 typedef void ( * SCOREP_Substrates_MpiRecvCb )(
     struct SCOREP_Location*          location,
@@ -414,6 +417,8 @@ typedef void ( * SCOREP_Substrates_MpiCollectiveBeginCb )(
  * @param tag provided MPI tag for this message
  *
  * @param bytesSent number of bytes received with this message
+ *
+ * @param bytesReceived number of bytes received with this message
  */
 typedef void ( * SCOREP_Substrates_MpiCollectiveEndCb )(
     struct SCOREP_Location*          location,
@@ -529,7 +534,7 @@ typedef void ( * SCOREP_Substrates_MpiIsendCb )(
  *
  * @param tag MPI tag
  *
- * @param bytesSent number of sent bytes
+ * @param bytesReceived number of bytes received with this message
  *
  * @param requestId request ID of the non blocking communication to be canceled (see MPI standard)
  */
@@ -674,7 +679,7 @@ typedef void ( * SCOREP_Substrates_RmaAcquireLockCb )(
  * This record marks the time that a request for a lock is issued where
  * the RMA model ensures that the lock is granted eventually without
  * further notification. As of now this is specific for MPI. In this case,
- * the @a SCOREP_RmaAquireLock event is not present.
+ * the @a SCOREP_RmaAcquireLock event is not present.
  *
  * @param location location which creates this event
  *
@@ -712,8 +717,6 @@ typedef void ( * SCOREP_Substrates_RmaRequestLockCb )(
  * @param remote Rank of target in context of window.
  *
  * @param lockId Lock id in context of window.
- *
- * @param lockType Type of lock (shared vs. exclusive).
  */
 typedef void ( * SCOREP_Substrates_RmaReleaseLockCb )(
     struct SCOREP_Location* location,
@@ -724,10 +727,6 @@ typedef void ( * SCOREP_Substrates_RmaReleaseLockCb )(
 
 /**
  * This record marks a simple pairwise synchronization.
- *
- * @param location location which creates this event
- *
- * @param timestamp timestamp for this event
  *
  * @param location location which creates this event
  *
@@ -761,7 +760,7 @@ typedef void ( * SCOREP_Substrates_RmaSyncCb )(
  *
  * @param windowHandle Memory window.
  *
- * @param group Group of participating processes or threads.
+ * @param groupHandle Group of participating processes or threads.
  */
 typedef void ( * SCOREP_Substrates_RmaGroupSyncCb )(
     struct SCOREP_Location* location,
@@ -829,7 +828,7 @@ typedef void ( * SCOREP_Substrates_RmaGetCb )(
  *
  * @param type Type of atomic operation (see @a SCOREP_RmaAtomicType).
  *
- * @param bytesSent Number of bytes transferred to rmeote target.
+ * @param bytesSent Number of bytes transferred to remote target.
  *
  * @param bytesReceived Number of bytes transferred from remote target.
  *
@@ -877,7 +876,7 @@ typedef void ( * SCOREP_Substrates_RmaWaitChangeCb )(
  *
  * @param timestamp timestamp for this event
  *
- * @param win Memory window.
+ * @param windowHandle Memory window.
  *
  * @param matchingId Matching number.
  *
@@ -909,7 +908,7 @@ typedef void ( * SCOREP_Substrates_RmaOpCompleteNonBlockingCb )(
  *
  * @param timestamp timestamp for this event
  *
- * @param win Memory window.
+ * @param windowHandle Memory window.
  *
  * @param matchingId Matching number.
  */
@@ -932,7 +931,7 @@ typedef void ( * SCOREP_Substrates_RmaOpTestCb )(
  *
  * @param timestamp timestamp for this event
  *
- * @param win Memory window.
+ * @param windowHandle Memory window.
  *
  * @param matchingId Matching number.
  */
@@ -1177,7 +1176,7 @@ typedef void ( * SCOREP_Substrates_ThreadForkJoinTaskCreateCb )(
  *                         @a threadId, this constitutes a unique task ID
  *                         inside the parallel region.
  *
- * @param task             A handle to the resumed task.
+ * @param taskHandle       A handle to the resumed task.
  */
 
 typedef void ( * SCOREP_Substrates_ThreadForkJoinTaskSwitchCb )(
@@ -1254,6 +1253,8 @@ typedef void ( * SCOREP_Substrates_ThreadForkJoinTaskEndCb )(
  *
  * @param createSequenceCount a process unique increasing number that is increased at every
  * SCOREP_Substrates_ThreadCreateWaitCreateCb and SCOREP_Substrates_ThreadForkJoinForkCb
+ *
+ * @{
  */
 
 typedef void ( * SCOREP_Substrates_ThreadCreateWaitCreateCb )(
@@ -1378,18 +1379,22 @@ typedef void ( * SCOREP_Substrates_TrackFreeCb )(
 
 
 /**
- * Records metrics before every ENTER_REGION, EXIT_REGION, SAMPLE, CALLING_CONTEXT_ENTER and CALLING_CONTEXT_EXIT.
- * First, strictly synchronous metrics are written, afterwards the synchronous ones, and finally SCOREP_METRIC_ASYNC_EVENT ones.
- * At the end of the measurement SCOREP_METRIC_ASYNC metrics are written.
+ * Used to record metrics. Provided by substrates as arguments to
+ * SCOREP_Metric_WriteStrictlySynchronousMetrics(),
+ * SCOREP_Metric_WriteSynchronousMetrics(), and
+ * SCOREP_Metric_WriteAsynchronousMetrics(). These functions are supposed
+ * to be called during following events: [CallingContext]Enter,
+ * [CallingContext]Exit, Sample. Will also be used for writing post mortem
+ * asynchronous metrics during SCOREP_EVENT_WRITE_POST_MORTEM_METRICS.
  *
  * @param location                 A pointer to the thread location data of the thread that executed
  *                                 the metric event.
  * @param timestamp                The timestamp, when the metric event occurred.
- * @param SCOREP_SamplingSetHandle The sampling set with metrics
+ * @param samplingSet              The sampling set with metrics
  * @param metricValues             Array of the metric values.
  *
  */
-typedef void ( * SCOREP_Substrates_WriteMetricBeforeEventCb )(
+typedef void ( * SCOREP_Substrates_WriteMetricsCb )(
     struct SCOREP_Location*  location,
     uint64_t                 timestamp,
     SCOREP_SamplingSetHandle samplingSet,

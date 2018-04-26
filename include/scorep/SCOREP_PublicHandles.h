@@ -34,7 +34,7 @@
 
 
 /**
- * @file       SCOREP_PublicHandles.h
+ * @file
  *
  * @brief Description of definition handles.
  * This header defines an enumeration to map SCOREP_AnyHandle to specific handles.

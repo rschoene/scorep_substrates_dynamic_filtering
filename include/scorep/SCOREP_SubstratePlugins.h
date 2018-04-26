@@ -1,26 +1,11 @@
 /*
  * This file is part of the Score-P software (http://www.score-p.org)
  *
- * Copyright (c) 2009-2013,
- * RWTH Aachen University, Germany
- *
- * Copyright (c) 2009-2013,
- * Gesellschaft fuer numerische Simulation mbH Braunschweig, Germany
- *
- * Copyright (c) 2009-2013, 2015-2016,
+ * Copyright (c) 2016-2018,
  * Technische Universitaet Dresden, Germany
  *
- * Copyright (c) 2009-2013,
- * University of Oregon, Eugene, USA
- *
- * Copyright (c) 2009-2013,
+ * Copyright (c) 2018,
  * Forschungszentrum Juelich GmbH, Germany
- *
- * Copyright (c) 2009-2013,
- * German Research School for Simulation Sciences GmbH, Juelich/Aachen, Germany
- *
- * Copyright (c) 2009-2013,
- * Technische Universitaet Muenchen, Germany
  *
  * This software may be modified and distributed under the terms of
  * a BSD-style license.  See the COPYING file in the package base
@@ -29,7 +14,7 @@
  */
 
 /**
- * @file       SCOREP_SubstratePlugins.h
+ * @file
  *
  * @brief Description of the substrate plugin header.
  *        For information on how to use substrate plugins, please refer to section @secref{substrate_plugins}.
@@ -135,6 +120,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 
+#include <scorep/SCOREP_PublicTypes.h>
 #include <scorep/SCOREP_PublicHandles.h>
 #include <scorep/SCOREP_SubstrateEvents.h>
 
@@ -160,6 +146,8 @@
 /**
  * Callbacks that are passed to Substrate plugins via the set_callbacks(...) call.
  * These callbacks can be used by the plugins to access Score-P internal data and functionality.
+ *
+ * Developer notice: New functions should be appended at the end of this struct. When extending this list, increase SCOREP_SUBSTRATE_PLUGIN_VERSION
  */
 typedef struct SCOREP_SubstratePluginCallbacks
 {
@@ -702,6 +690,43 @@ typedef struct SCOREP_SubstratePluginCallbacks
      */
     const char*
     ( *SCOREP_StringHandle_Get )( SCOREP_StringHandle handle );
+
+    /** @brief Tell Score-P to write the current strictly synchronous metrics to cb
+     *
+     * This function shall only be called while processing enters, exits, and samples.
+     * @param location the location of the runtime event, this is reported back via cb
+     * @param timestamp the timestamp of the runtime event, this is reported back via cb
+     * @param cb a callback that processes the strictly synchronous metrics.
+     */
+
+    void
+    ( * SCOREP_Metric_WriteStrictlySynchronousMetrics )( struct SCOREP_Location*          location,
+                                                         uint64_t                         timestamp,
+                                                         SCOREP_Substrates_WriteMetricsCb cb );
+
+    /** @brief Tell Score-P to write the current synchronous metrics to cb
+     *
+     * This function shall only be called while processing enters, exits, and samples.
+     * The callback might be called multiple times if multiple synchronous sampling sets are present.
+     * @param location the location of the runtime event, this is reported back via cb
+     * @param timestamp the timestamp of the runtime event, this is reported back via cb
+     * @param cb a callback that processes the synchronous metrics.
+     */
+    void
+    ( * SCOREP_Metric_WriteSynchronousMetrics )( struct SCOREP_Location*          location,
+                                                 uint64_t                         timestamp,
+                                                 SCOREP_Substrates_WriteMetricsCb cb );
+
+    /** @brief Tell Score-P to write the current asynchronous metrics to cb
+     *
+     * This function shall only be called while processing enters, exits, and samples.
+     * The callback might be called multiple times if multiple asynchronous sampling sets are present.
+     * @param location the location of the runtime event, this is reported back via cb
+     * @param cb a callback that processes the asynchronous metrics.
+     */
+    void
+    ( * SCOREP_Metric_WriteAsynchronousMetrics )( struct SCOREP_Location*          location,
+                                                  SCOREP_Substrates_WriteMetricsCb cb );
 } SCOREP_SubstratePluginCallbacks;
 
 
@@ -742,6 +767,8 @@ typedef struct SCOREP_SubstratePluginCallbacks
  *   -# finalize()
  *
  * Not implemented functions MUST point to NULL, e.g., info.assign_id = NULL;
+ *
+ * Developer notice: When a new function is necessary, append it after the functions, but before undeclared. For each new function, decrease SCOREP_SUBSTRATE_PLUGIN_UNDEFINED_MANAGEMENT_FUNCTIONS by one. If this happens, increase SCOREP_PLUGIN_VERSION.
  */
 typedef struct SCOREP_SubstratePluginInfo
 {
@@ -914,11 +941,11 @@ typedef struct SCOREP_SubstratePluginInfo
      * @param flag the requirement flag that is queried
      * @return the setting for the requirement flag, which highly depends on the type of flag
      */
-    int64_t ( * get_requirement )( SCOREP_Substrates_RequirementFlag flag );
+    bool ( * get_requirement )( SCOREP_Substrates_RequirementFlag flag );
 
     /**
      *  for future extensions
-     *  Plugins must set this to 0 (e.g., via memset)
+     *  Plugins must set all entries of this list to 0 (e.g., via memset)
      *
      *  When a new function is added in Score-P, SCOREP_SUBSTRATE_PLUGIN_UNDEFINED_MANAGEMENT_FUNCTIONS should be decreased by 1.
      *  Score-P should check for an appropriate plugin_version before calling the new function.
