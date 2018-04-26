@@ -1,0 +1,42 @@
+language: generic
+sudo: required
+dist: trusty
+matrix:
+  include:
+    - os: linux
+      env: CXX=g++-5 CC=gcc-5
+      addons:
+        apt:
+          packages:
+            - g++-5
+            - cmake
+            - cmake-data
+            - libunwind8
+            - libunwind8-dev
+          sources: &sources
+            - llvm-toolchain-precise-3.8
+            - ubuntu-toolchain-r-test
+            - george-edison55-precise-backports
+    - os: linux
+      env: CXX=clang++-3.8 CC=clang-3.8
+      addons:
+        apt:
+          packages:
+            - clang-3.8
+            - cmake
+            - cmake-data
+            - libunwind8
+            - libunwind8-dev
+          sources: *sources
+before_script:
+  - mkdir build
+  - cd build
+  - git clone https://github.com/rschoene/scorep_substrates_dynamic_filtering.git
+  - cd scorep_substrates_dynamic_filtering
+  - git checkout scorep_headers
+  - cd ../..
+  - git apply build/scorep_substrates_dynamic_filtering/0001-Creates-patch-for-CMakeLists.txt-needed-for-building.patch
+  - cd build
+  - cmake ..
+script:
+  - make
