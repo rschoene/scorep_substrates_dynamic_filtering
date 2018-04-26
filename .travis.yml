@@ -38,5 +38,6 @@ before_script:
   - git apply build/scorep_substrates_dynamic_filtering/0001-Creates-patch-for-CMakeLists.txt-needed-for-building.patch
   - cd build
   - cmake ..
+
 script:
   - make
