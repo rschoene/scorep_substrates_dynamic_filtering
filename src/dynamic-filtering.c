@@ -1052,11 +1052,11 @@ static void finalize( void )
 
 
 /* we need the output folder, therefore we tell Score-P about it */
-static int64_t get_requirement( SCOREP_Substrates_RequirementFlag flag )
+static bool get_requirement( SCOREP_Substrates_RequirementFlag flag )
 {
   switch ( flag )
   {
-      case SCOREP_SUBSTRATES_REQUIREMENT_EXPERIMENT_DIRECTORY:
+      case SCOREP_SUBSTRATES_REQUIREMENT_CREATE_EXPERIMENT_DIRECTORY:
           return 1;
       default:
           return 0;
