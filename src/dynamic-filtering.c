@@ -352,6 +352,13 @@ static char* get_function_call_ip( const char*                                  
                         void** real_target=(void**)(assumed_plt+(unsigned long long)jmp_adr+6);
                         if (*real_target == (void*) function_exit_address )
                         {
+                            // TODO: Parse the following commands, jmp to a different address.
+                            /* It looks like this:
+                             *  (ip + DISPLACEMENT(assumed)) 454e30:       ff 25 3a 7a 29 00       jmpq   *0x297a3a(%rip)        # 6ec870 <_GLOBAL_OFFSET_TABLE_+0x38>
+                                (store ID has to be called)  454e36:       68 04 00 00 00          pushq  $0x4
+                                (Has to be called)           454e3b:       e9 a0 ff ff ff          jmpq   454de0 <_init+0x20>
+                             * The ID from step 2 has to be saved. The call address has to be used
+                             */
                            return (char*) assumed;
                         }
                     }
