@@ -94,6 +94,8 @@ typedef struct local_region_info
     char* exit_func;
     /** Marks whether the region is optimized beyond repair */
     bool optimized;
+    /** Human readable name of the region */
+    char* region_name;
 } local_region_info;
 
 /** Global list of defined regions */
@@ -157,6 +159,8 @@ static bool create_report;
 
 /** Whether to write a filter file */
 static bool create_filter;
+
+static unsigned long long base_pointer;
 
 /**
  * Update the mean duration of all regions.
@@ -281,110 +285,33 @@ static void get_instrumentation_call_type( )
  * @return                                  Pointer to the first byte of the call to the given
  *                                          function in the current call path.
  */
-
-static  char * function_exit_address ;
 static bool printed_warning;
 
 #define DISPLACEMENT(JMPQ_ADDRESS) \
-    (((int32_t) JMPQ_ADDRESS[4])<<24 | ((int32_t) JMPQ_ADDRESS[3])<<16 | ((int32_t) JMPQ_ADDRESS[2])<<8 | ((int32_t) JMPQ_ADDRESS[1]))
+    (((int64_t) JMPQ_ADDRESS[4])<<24 | ((int64_t) JMPQ_ADDRESS[3])<<16 | ((int64_t) JMPQ_ADDRESS[2])<<8 | ((int64_t) JMPQ_ADDRESS[1]))
 
 
-static char* get_function_call_ip( const char*                                      function_name,
-                                   int is_enter )
+static char* get_function_call_ip( int is_enter )
 {
-    // If we haven't found the instrumentation type, we can't search for call IPs
-    if( !function_name )
-    {
-        return 0;
-    }
-
     unw_cursor_t cursor;
     unw_context_t uc;
-    unw_word_t ip, offset;
-    char sym[256];
+    unw_word_t ip;
 
     unw_getcontext( &uc );
     unw_init_local( &cursor, &uc );
 
-    bool found = false;
+    unsigned char * target_address_scorep = dlsym(RTLD_DEFAULT, is_enter? enter_func:exit_func );
 
     // Step up the call path...
     while( unw_step( &cursor ) > 0 )
     {
-        // ...and check if the current entry has the name given in the parameter.
-        unw_get_proc_name( &cursor, sym, sizeof( sym ), &offset );
-
-        // We need to get the last (in up direction) call to the function to avoid deleting of
-        // intermediate jumps within the function as libunwind does not report them any different.
-        if( strcmp( sym, function_name ) == 0 )
-        {
-            found = true;
-            if ( function_exit_address == NULL && is_enter == false )
-            {
-                unw_proc_info_t pip;
-                unw_get_proc_info( &cursor , &pip );
-                function_exit_address = (char *) pip.start_ip;
-            }
-        }
         unw_get_reg( &cursor, UNW_REG_IP, &ip );
 
-        if( found && strcmp( sym, function_name ) != 0 )
-        {
-            // UNW_REG_IP is the first byte _after_ the callq so we need to step back 5 bytes.
-            unw_get_reg( &cursor, UNW_REG_IP, &ip );
-            if (is_enter)
-            {
-                return (char*) ( ip - 5 );
-            }
-            else
-            {
-                unsigned char * assumed = (unsigned char *) ip - 5;
-                if ( ( *assumed != 0xe8 && *assumed != 0xff && *assumed != 0xea ) ||
-                        ( (char *) ( ip + DISPLACEMENT(assumed) ) != function_exit_address ) )
+        unsigned char* assumed= (unsigned char*) ( ip - 5 );
+        unsigned char * jmp_adr =(unsigned char*) (DISPLACEMENT(assumed));
+        if (jmp_adr+(ip) == target_address_scorep )
+            return (char*) assumed;
 
-                {
-                    /* Fallback: plt/gob????*/
-                    /* get assembly from address*/
-                    unsigned char * assumed_plt = (unsigned char*) ip + DISPLACEMENT(assumed);
-                    if ( ((assumed_plt[0] & 0xff) == 0xff) && ((assumed_plt[1] & 0xff) == 0x25) )
-                    {
-                        void * jmp_adr = (void*) (((long long)assumed_plt[5] << 24) +((long long)assumed_plt[4] << 16) + ((long long)assumed_plt[3] << 8) + ((long long)assumed_plt[2] ));
-                        void** real_target=(void**)(assumed_plt+(unsigned long long)jmp_adr+6);
-                        if (*real_target == (void*) function_exit_address )
-                        {
-                            // TODO: Parse the following commands, jmp to a different address.
-                            /* It looks like this:
-                             *  (ip + DISPLACEMENT(assumed)) 454e30:       ff 25 3a 7a 29 00       jmpq   *0x297a3a(%rip)        # 6ec870 <_GLOBAL_OFFSET_TABLE_+0x38>
-                                (store ID has to be called)  454e36:       68 04 00 00 00          pushq  $0x4
-                                (Has to be called)           454e3b:       e9 a0 ff ff ff          jmpq   454de0 <_init+0x20>
-                             * The ID from step 2 has to be saved. The call address has to be used
-                             */
-                           return (char*) assumed;
-                        }
-                    }
-                    if ( !printed_warning )
-                    {
-                        fprintf(stderr,"Your program uses (partially) call optimizations, for example \"-foptimize-sibling-calls\". This flag might be included in -O2 and -O3. Try to add the compiler flag \"-fno-optimize-sibling-calls\", which could help this plugin to work.\n");
-                        printed_warning = true;
-                        if ( continue_despite )
-                        {
-                            fprintf(stderr,"Since you specified SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CONTINUE_DESPITE_FAILURE to be true, the plugin will continue nevertheless\n");
-                        }
-                        else
-                        {
-                            fprintf(stderr,"Since you SCOREP_SUBSTRATE_DYNAMIC_FILTERING_CONTINUE_DESPITE_FAILURE is not set to true, the plugin will be disabled\n");
-                        }
-                    }
-
-                    return NULL;
-
-                } else
-                {
-                    return (char*) assumed;
-                }
-
-            }
-        }
     }
 
     // This shouldn't happen, if we're on this point, we tried to delete a function not present in
@@ -491,6 +418,7 @@ void on_join( __attribute__((unused)) struct SCOREP_Location*                   
     {
         uint32_t border = num_threads > MAX_THREAD_CNT ? MAX_THREAD_CNT : num_threads;
 
+
         // Combine the locally gathered information with the global ones.
         for( uint32_t i = 0; i < border; ++i )
         {
@@ -520,7 +448,6 @@ void on_join( __attribute__((unused)) struct SCOREP_Location*                   
                 }
             }
         }
-
         if( filtering_absolute )
         {
             // We're filtering absolute so just compare this region's mean duration with the
@@ -606,7 +533,7 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         // Check for missing instruction pointer.
         if( !region->enter_func )
         {
-            region->enter_func = get_function_call_ip( enter_func , 1 );
+            region->enter_func = get_function_call_ip( 1 );
             if ( region->enter_func == NULL )
                 region->optimized = true;
         }
@@ -625,7 +552,6 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
         local_region_info* info;
         HASH_FIND( hh, local_info_array[local_info_array_index], &region_handle, sizeof( uint32_t ),
                                                                                             info );
-
         if( info != NULL )
         {
             if (info->optimized)
@@ -637,7 +563,7 @@ static void on_enter_region( __attribute__((unused)) struct SCOREP_Location*    
             // Check for missing instruction pointer.
             if( !info->enter_func )
             {
-                info->enter_func = get_function_call_ip( enter_func , 1 );
+                info->enter_func = get_function_call_ip( 1 );
                 if ( info->enter_func == NULL )
                     info->optimized = true;
             }
@@ -682,7 +608,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
         // Check for missing instruction pointer.
         if( !region->exit_func )
         {
-            region->exit_func = get_function_call_ip( exit_func , 0 );
+            region->exit_func = get_function_call_ip( 0 );
             if ( region->exit_func == NULL )
                 region->optimized = true;
         }
@@ -753,7 +679,7 @@ static void on_exit_region( __attribute__((unused)) struct SCOREP_Location*     
             // Check for missing instruction pointer.
             if( !info->exit_func )
             {
-                info->exit_func = get_function_call_ip( exit_func , 0 );
+                info->exit_func = get_function_call_ip(  0 );
                 if ( info->exit_func == NULL )
                     info->optimized = true;
             }
@@ -787,7 +713,7 @@ static void on_define_region( SCOREP_AnyHandle                                  
     HASH_FIND( hh, regions, &handle, sizeof( uint32_t ), new );
     if( new == NULL )
     {
-        const char* region_name = callbacks->SCOREP_RegionHandle_GetName( handle );
+        const char* region_name = callbacks->SCOREP_RegionHandle_GetCanonicalName( handle );
 
         new = calloc( 1, sizeof( region_info ) );
         new->region_handle = handle;
@@ -901,13 +827,13 @@ static int init( void )
 
     // Get the wanted filtering method.
     env_str = getenv( "SCOREP_SUBSTRATE_DYNAMIC_FILTERING_METHOD" );
+    filtering_absolute = true;
     if( env_str != NULL )
     {
-        if( strcmp( env_str, "absolute" ) != 0 )
+        if( strcmp( env_str, "dynamic" ) == 0 )
         {
-            filtering_absolute = true;
+            filtering_absolute = false;
         }
-        filtering_absolute = false;
     }
 
     // Get the wanted filtering method.
@@ -939,6 +865,10 @@ static int init( void )
             create_filter = true;
         }
     }
+
+    FILE* maps=fopen("/proc/self/maps","r");
+    fscanf(maps,"%llx",&base_pointer);
+    fclose(maps);
 
     return 0;
 }
