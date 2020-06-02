@@ -21,5 +21,8 @@ include_directories(${PROJECT_SOURCE_DIR}/src/ ${SCOREP_INCLUDE_DIRS})
 
 add_library(${PROJECT_NAME} SHARED ${PLUGIN_SOURCE_FILES})
 
-find_library(UNW_LIB unwind)
+find_library(UNW_LIB unwind HINT ${LIBUNWIND_ROOT}/lib)
+find_path(UNW_INC libunwind.h HINT ${LIBUNWIND_ROOT}/include)
+message(STATUS "libunwind.h found at ${UNW_INC}")
 target_link_libraries(${PROJECT_NAME} "${UNW_LIB}")
+target_include_directories(${PROJECT_NAME} PRIVATE "${UNW_INC}")
