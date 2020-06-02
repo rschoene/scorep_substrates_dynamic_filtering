@@ -103,7 +103,7 @@ The configuration of the plugin is done via environment variables.
     
     
 ### Known issues
-The compiler optimization `-foptimize-sibling-calls` is usually enabled for icc/gcc at -O2 and -O3. This will be detected by the plugin but the calls cannot be patched in this case. If you want to avoid this, but still use the other optimizations, just pass `-fnooptimize-sibling-calls` to your compiler.
+The compiler optimization `-foptimize-sibling-calls` is usually enabled for icc/gcc at -O2 and -O3. This will be detected by the plugin but the calls cannot be patched in this case. If you want to avoid this, but still use the other optimizations, just pass `-fno-optimize-sibling-calls` to your compiler.
 
 The plugin only works when there is exactly one enter and one exit function for every instrumented function. This will probably not be the case with C++ programs.
 ### If anything fails
